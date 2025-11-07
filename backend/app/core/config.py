@@ -6,6 +6,8 @@ from dotenv import load_dotenv
 load_dotenv()
 
 class Settings(BaseSettings):
+    model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
+    
     # FastAPI Settings
     SECRET_KEY: str = os.getenv("SECRET_KEY", "your-secret-key-change-in-production")
     ALGORITHM: str = os.getenv("ALGORITHM", "HS256")
@@ -28,9 +30,6 @@ class Settings(BaseSettings):
     # Celery
     CELERY_BROKER_URL: Optional[str] = os.getenv("CELERY_BROKER_URL", "redis://localhost:6379/0")
     CELERY_RESULT_BACKEND: Optional[str] = os.getenv("CELERY_RESULT_BACKEND", "redis://localhost:6379/0")
-    
-    class Config:
-        env_file = ".env"
 
 settings = Settings()
 
