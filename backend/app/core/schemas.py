@@ -25,7 +25,7 @@ class Token(BaseModel):
 
 # Email Schemas
 class EmailResponse(BaseModel):
-    id: int
+    id: str  # Changed to str to match Gmail message IDs
     from_email: str  # Use from_email as the field name
     subject: str
     preview: str
@@ -33,9 +33,38 @@ class EmailResponse(BaseModel):
     unread: bool = True
     timestamp: str
     time: str = None
+    thread_id: Optional[str] = None
     
     class Config:
         from_attributes = True
+
+class EmailDetailResponse(BaseModel):
+    id: str
+    thread_id: str
+    from_email: str
+    to: str
+    subject: str
+    body: str
+    date: str
+    unread: bool
+    snippet: str
+
+class EmailReplyRequest(BaseModel):
+    message_id: str
+    reply_text: str
+
+class EmailForwardRequest(BaseModel):
+    message_id: str
+    to_emails: List[str]
+    forward_text: str = ""
+
+class EmailMarkReadRequest(BaseModel):
+    message_id: str
+    read: bool = True
+
+class EmailThreadResponse(BaseModel):
+    thread_id: str
+    messages: List[EmailDetailResponse]
 
 # Meeting Schemas
 class MeetingBase(BaseModel):
@@ -46,11 +75,31 @@ class MeetingBase(BaseModel):
     attendees: List[str]
 
 class MeetingResponse(MeetingBase):
-    id: int
+    id: str  # Changed to str to match Google Calendar event IDs
     upcoming: bool = True
+    date: Optional[str] = None
+    start_datetime: Optional[str] = None
+    end_datetime: Optional[str] = None
+    description: Optional[str] = None
     
     class Config:
         from_attributes = True
+
+class MeetingCreate(BaseModel):
+    title: str
+    start_datetime: str
+    end_datetime: str
+    location: str = ""
+    description: str = ""
+    attendees: List[str] = []
+
+class MeetingUpdate(BaseModel):
+    title: Optional[str] = None
+    start_datetime: Optional[str] = None
+    end_datetime: Optional[str] = None
+    location: Optional[str] = None
+    description: Optional[str] = None
+    attendees: Optional[List[str]] = None
 
 # Todo Schemas
 class TodoBase(BaseModel):

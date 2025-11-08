@@ -8,16 +8,19 @@ from app.core.schemas import (
     TodoResponse, NotificationResponse, Suggestion, TodoCreate, TodoUpdate
 )
 from app.core.google_services import GmailService, CalendarService
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import List
 import json
 
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
 
 def get_google_credentials(user: User, db: Session) -> dict:
-    """Get decrypted Google credentials for user"""
+    """Get decrypted Google credentials for user, refreshing if expired"""
     from app.core.config import settings
     from app.core.models import ServiceToken
+    from app.core.google_auth import refresh_access_token
+    from google.oauth2.credentials import Credentials
+    from google.auth.transport.requests import Request
     
     service_token = db.query(ServiceToken).filter(
         ServiceToken.user_id == user.id,
@@ -27,23 +30,80 @@ def get_google_credentials(user: User, db: Session) -> dict:
     if not service_token:
         return None
     
-    credentials_dict = {
-        "token": ServiceToken.decrypt_token(service_token.access_token_encrypted),
-        "token_uri": "https://oauth2.googleapis.com/token",
-        "client_id": settings.GOOGLE_CLIENT_ID,
-        "client_secret": settings.GOOGLE_CLIENT_SECRET,
-        "scopes": [
-            'https://www.googleapis.com/auth/gmail.readonly',
-            'https://www.googleapis.com/auth/calendar.readonly',
-            'https://www.googleapis.com/auth/userinfo.email',
-            'https://www.googleapis.com/auth/userinfo.profile'
-        ]
-    }
-    
-    if service_token.refresh_token_encrypted:
-        credentials_dict["refresh_token"] = ServiceToken.decrypt_token(service_token.refresh_token_encrypted)
-    
-    return credentials_dict
+    try:
+        # Decrypt tokens
+        access_token = ServiceToken.decrypt_token(service_token.access_token_encrypted)
+        refresh_token = ServiceToken.decrypt_token(service_token.refresh_token_encrypted) if service_token.refresh_token_encrypted else None
+        
+        # Check if token is expired (check stored expiry or try to use credentials)
+        needs_refresh = False
+        if service_token.expires_at:
+            # Check stored expiry time
+            if service_token.expires_at < datetime.now(timezone.utc):
+                needs_refresh = True
+                print(f"Token expired for user {user.id} (expired at {service_token.expires_at})")
+        else:
+            # No expiry stored, create credentials and check if expired
+            try:
+                credentials = Credentials(
+                    token=access_token,
+                    refresh_token=refresh_token,
+                    token_uri="https://oauth2.googleapis.com/token",
+                    client_id=settings.GOOGLE_CLIENT_ID,
+                    client_secret=settings.GOOGLE_CLIENT_SECRET
+                )
+                if credentials.expired:
+                    needs_refresh = True
+            except Exception:
+                # If we can't check, assume it needs refresh if we have refresh token
+                needs_refresh = bool(refresh_token)
+        
+        # Refresh token if expired
+        if needs_refresh and refresh_token:
+            try:
+                credentials = Credentials(
+                    token=None,
+                    refresh_token=refresh_token,
+                    token_uri="https://oauth2.googleapis.com/token",
+                    client_id=settings.GOOGLE_CLIENT_ID,
+                    client_secret=settings.GOOGLE_CLIENT_SECRET
+                )
+                credentials.refresh(Request())
+                # Update stored token
+                service_token.access_token_encrypted = ServiceToken.encrypt_token(credentials.token)
+                if credentials.expiry:
+                    service_token.expires_at = credentials.expiry
+                db.commit()
+                access_token = credentials.token
+                print(f"Token refreshed successfully for user {user.id}")
+            except Exception as e:
+                print(f"Error refreshing token for user {user.id}: {e}")
+                db.rollback()
+                # Token refresh failed - user may need to re-authenticate
+                return None
+        
+        credentials_dict = {
+            "token": access_token,
+            "token_uri": "https://oauth2.googleapis.com/token",
+            "client_id": settings.GOOGLE_CLIENT_ID,
+            "client_secret": settings.GOOGLE_CLIENT_SECRET,
+            "scopes": [
+                'https://www.googleapis.com/auth/gmail.readonly',
+                'https://www.googleapis.com/auth/gmail.modify',
+                'https://www.googleapis.com/auth/calendar.readonly',
+                'https://www.googleapis.com/auth/calendar',
+                'https://www.googleapis.com/auth/userinfo.email',
+                'https://www.googleapis.com/auth/userinfo.profile'
+            ]
+        }
+        
+        if refresh_token:
+            credentials_dict["refresh_token"] = refresh_token
+        
+        return credentials_dict
+    except Exception as e:
+        print(f"Error getting credentials: {e}")
+        return None
 
 @router.get("/contextual-data", response_model=DashboardData)
 async def get_contextual_data(
@@ -51,44 +111,114 @@ async def get_contextual_data(
     db: Session = Depends(get_db)
 ):
     """Get all contextual dashboard data"""
-    # Check cache first
+    # Check cache first (but skip if it contains mock data)
     cache = db.query(DashboardCache).filter(DashboardCache.user_id == current_user.id).first()
     if cache and cache.last_updated:
         # Check if cache is still valid (5 minutes)
-        if (datetime.now() - cache.last_updated).total_seconds() < 300:
-            return DashboardData(**cache.data)
+        # Make sure both datetimes are timezone-aware
+        now = datetime.now(timezone.utc)
+        cache_time = cache.last_updated
+        if cache_time.tzinfo is None:
+            # If cache time is naive, assume it's UTC
+            cache_time = cache_time.replace(tzinfo=timezone.utc)
+        # Check if cache is fresh (5 minutes)
+        cache_age_seconds = (now - cache_time).total_seconds()
+        if cache_age_seconds < 300:
+            # Cache is fresh - check if it contains mock data
+            cache_data = cache.data if isinstance(cache.data, dict) else {}
+            cache_emails = cache_data.get('emails', [])
+            has_mock_data = False
+            if cache_emails:
+                # Only check for mock data if emails exist
+                has_mock_data = any(
+                    str(email.get('id', '')).startswith('mock-') or 
+                    email.get('from_email', '') in ['Sarah Chen', 'Mike Johnson']
+                    for email in cache_emails
+                )
+            
+            # Only use cache if it doesn't contain mock data
+            if not has_mock_data:
+                print(f"Using cached data (age: {cache_age_seconds:.0f}s)")
+                return DashboardData(**cache.data)
+            else:
+                # Invalidate cache if it has mock data
+                print("Cache contains mock data, invalidating and fetching fresh data...")
+                db.delete(cache)
+                db.commit()
+        else:
+            # Cache is stale, will fetch fresh data
+            print(f"Cache expired (age: {cache_age_seconds:.0f}s), fetching fresh data...")
     
     # Fetch fresh data
     emails = []
     meetings = []
     
     # Try to fetch from Google services
-    try:
-        credentials = get_google_credentials(current_user, db)
-        if credentials:
-            # Fetch emails
+    credentials = get_google_credentials(current_user, db)
+    if not credentials:
+        print(f"No Google credentials found for user {current_user.id}")
+    else:
+        print(f"Fetching emails and meetings for user {current_user.id}...")
+        
+        # Fetch emails - try unread first, then fallback to recent if no unread
+        try:
             gmail_service = GmailService(credentials)
-            emails_data = gmail_service.get_unread_emails(max_results=5)
-            emails = [EmailResponse(
-                id=i+1, 
-                from_email=email.get('from', 'Unknown'), 
-                subject=email.get('subject', ''), 
-                preview=email.get('preview', ''), 
-                priority=email.get('priority', 'medium'),
-                unread=email.get('unread', True), 
-                timestamp=email.get('time', ''),
-                time=email.get('time', '')
-            ) for i, email in enumerate(emails_data)]
             
-            # Fetch meetings
+            # First try to get unread emails
+            emails_data = gmail_service.get_unread_emails(max_results=5)
+            print(f"Unread emails: {len(emails_data) if emails_data else 0}")
+            
+            # If no unread emails, get recent emails (read and unread)
+            if not emails_data or len(emails_data) == 0:
+                print("No unread emails, fetching recent emails instead...")
+                emails_data = gmail_service.get_recent_emails(max_results=5)
+                print(f"Recent emails: {len(emails_data) if emails_data else 0}")
+            
+            if emails_data and len(emails_data) > 0:
+                emails = [EmailResponse(
+                    id=email.get('id', ''), 
+                    from_email=email.get('from', 'Unknown'), 
+                    subject=email.get('subject', ''), 
+                    preview=email.get('preview', ''), 
+                    priority=email.get('priority', 'medium'),
+                    unread=email.get('unread', True), 
+                    timestamp=email.get('time', ''),
+                    time=email.get('time', ''),
+                    thread_id=email.get('thread_id')  # Extract thread_id from email data
+                ) for email in emails_data]
+                print(f"Successfully converted {len(emails)} emails to EmailResponse objects")
+            else:
+                print("No emails found in Gmail")
+                emails = []  # Empty list if no emails at all
+        except Exception as e:
+            import traceback
+            error_details = traceback.format_exc()
+            print(f"ERROR fetching emails from Gmail for user {current_user.id}")
+            print(f"Error type: {type(e).__name__}")
+            print(f"Error message: {str(e)}")
+            print(f"Full traceback:\n{error_details}")
+            # Return empty list on error, but log it clearly
+            emails = []
+            # Don't raise - allow dashboard to load with empty email list
+        
+        # Fetch meetings
+        try:
             calendar_service = CalendarService(credentials)
             meetings_data = calendar_service.get_upcoming_events(max_results=3)
-            meetings = [MeetingResponse(id=i+1, **meeting) for i, meeting in enumerate(meetings_data)]
-    except Exception as e:
-        print(f"Error fetching from Google services: {e}")
-        # Fall back to mock data if service unavailable
-        emails = get_mock_emails()
-        meetings = get_mock_meetings()
+            print(f"Fetched {len(meetings_data) if meetings_data else 0} meetings from Calendar")
+            if meetings_data:
+                meetings = [MeetingResponse(**meeting) for meeting in meetings_data]
+            else:
+                print("No meetings returned from Calendar API")
+        except Exception as e:
+            import traceback
+            error_details = traceback.format_exc()
+            print(f"ERROR fetching meetings from Calendar for user {current_user.id}: {e}")
+            print(f"Traceback: {error_details}")
+            # Don't fall back to mock data - return empty list instead
+            meetings = []
+    
+    print(f"Returning {len(emails)} emails and {len(meetings)} meetings for user {current_user.id}")
     
     # Get todos
     todos = db.query(Todo).filter(
@@ -116,7 +246,7 @@ async def get_contextual_data(
     # Generate daily brief
     daily_brief = DailyBrief(
         summary=f"Good {get_time_of_day()}! You have {len(meetings)} meeting{'s' if len(meetings) != 1 else ''} today, {len([e for e in emails if e.unread])} unread priority email{'s' if len([e for e in emails if e.unread]) != 1 else ''}, and {len([t for t in todos_response if not t.completed])} action item{'s' if len([t for t in todos_response if not t.completed]) != 1 else ''} requiring attention.",
-        date=datetime.now().strftime('%A, %B %d, %Y')
+        date=datetime.now(timezone.utc).strftime('%A, %B %d, %Y')
     )
     
     # Generate suggestions
@@ -133,14 +263,15 @@ async def get_contextual_data(
     )
     
     # Update cache
+    now = datetime.now(timezone.utc)
     if cache:
         cache.data = dashboard_data.dict()
-        cache.last_updated = datetime.now()
+        cache.last_updated = now
     else:
         cache = DashboardCache(
             user_id=current_user.id,
             data=dashboard_data.dict(),
-            last_updated=datetime.now()
+            last_updated=now
         )
         db.add(cache)
     db.commit()
@@ -151,24 +282,26 @@ def get_mock_emails() -> List[EmailResponse]:
     """Return mock emails when service unavailable"""
     return [
         EmailResponse(
-            id=1,
+            id="mock-1",
             from_email="Sarah Chen",
             subject="Q4 Project Review - Action Required",
             preview="Hi, we need to finalize the Q4 review document by end of day...",
             priority="high",
             unread=True,
             timestamp="2 hours ago",
-            time="2 hours ago"
+            time="2 hours ago",
+            thread_id=None
         ),
         EmailResponse(
-            id=2,
+            id="mock-2",
             from_email="Mike Johnson",
             subject="Re: Budget Approval",
             preview="The budget has been approved. Please proceed with...",
             priority="medium",
             unread=True,
             timestamp="4 hours ago",
-            time="4 hours ago"
+            time="4 hours ago",
+            thread_id=None
         )
     ]
 
@@ -176,28 +309,39 @@ def get_mock_meetings() -> List[MeetingResponse]:
     """Return mock meetings when service unavailable"""
     return [
         MeetingResponse(
-            id=1,
+            id="mock-1",
             title="Team Standup",
             time="10:00 AM",
             duration="30 min",
             location="Conference Room A",
             attendees=["Sarah", "Mike", "Alex"],
-            upcoming=True
+            upcoming=True,
+            date=None,
+            start_datetime=None,
+            end_datetime=None,
+            description=None
         ),
         MeetingResponse(
-            id=2,
+            id="mock-2",
             title="Client Presentation",
             time="3:00 PM",
             duration="1 hour",
             location="Virtual",
             attendees=["Client Team"],
-            upcoming=True
+            upcoming=True,
+            date=None,
+            start_datetime=None,
+            end_datetime=None,
+            description=None
         )
     ]
 
 def get_time_ago(dt: datetime) -> str:
     """Calculate time ago string"""
-    now = datetime.now()
+    now = datetime.now(timezone.utc)
+    # Make sure dt is timezone-aware
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
     diff = now - dt
     
     if diff.days > 0:
@@ -213,7 +357,7 @@ def get_time_ago(dt: datetime) -> str:
 
 def get_time_of_day() -> str:
     """Get time of day greeting"""
-    hour = datetime.now().hour
+    hour = datetime.now(timezone.utc).hour
     if hour < 12:
         return "morning"
     elif hour < 17:
@@ -264,23 +408,42 @@ async def get_emails(
     """Get user's emails"""
     credentials = get_google_credentials(current_user, db)
     if not credentials:
-        return get_mock_emails()
+        # Return empty list instead of mock data when no credentials
+        return []
     
     try:
         gmail_service = GmailService(credentials)
+        
+        # Try unread first, then recent if no unread
         emails_data = gmail_service.get_unread_emails(max_results=10)
+        if not emails_data or len(emails_data) == 0:
+            emails_data = gmail_service.get_recent_emails(max_results=10)
+        
+        if not emails_data:
+            return []
+        
         return [EmailResponse(
-            id=i+1, 
+            id=email.get('id', ''), 
             from_email=email.get('from', 'Unknown'), 
             subject=email.get('subject', ''), 
             preview=email.get('preview', ''), 
             priority=email.get('priority', 'medium'),
             unread=email.get('unread', True), 
             timestamp=email.get('time', ''),
-            time=email.get('time', '')
-        ) for i, email in enumerate(emails_data)]
+            time=email.get('time', ''),
+            thread_id=email.get('thread_id')  # Extract thread_id
+        ) for email in emails_data]
     except Exception as e:
-        return get_mock_emails()
+        import traceback
+        error_details = traceback.format_exc()
+        print(f"Error fetching emails: {e}")
+        print(f"Traceback: {error_details}")
+        # Return empty list instead of mock data on error
+        # This way the user knows something went wrong rather than seeing fake data
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to fetch emails: {str(e)}"
+        )
 
 @router.get("/meetings", response_model=List[MeetingResponse])
 async def get_meetings(
@@ -290,14 +453,26 @@ async def get_meetings(
     """Get user's upcoming meetings"""
     credentials = get_google_credentials(current_user, db)
     if not credentials:
-        return get_mock_meetings()
+        # Return empty list instead of mock data when no credentials
+        return []
     
     try:
         calendar_service = CalendarService(credentials)
         meetings_data = calendar_service.get_upcoming_events(max_results=10)
-        return [MeetingResponse(id=i+1, **meeting) for i, meeting in enumerate(meetings_data)]
+        if not meetings_data:
+            return []
+        
+        return [MeetingResponse(**meeting) for meeting in meetings_data]
     except Exception as e:
-        return get_mock_meetings()
+        import traceback
+        error_details = traceback.format_exc()
+        print(f"Error fetching meetings: {e}")
+        print(f"Traceback: {error_details}")
+        # Return empty list instead of mock data on error
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to fetch meetings: {str(e)}"
+        )
 
 @router.get("/todos", response_model=List[TodoResponse])
 async def get_todos(

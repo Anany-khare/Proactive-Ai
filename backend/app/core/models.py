@@ -8,9 +8,11 @@ import os
 # Encryption key for sensitive data (in production, store this securely)
 ENCRYPTION_KEY = os.getenv("ENCRYPTION_KEY", Fernet.generate_key().decode())
 if isinstance(ENCRYPTION_KEY, str):
-    ENCRYPTION_KEY = ENCRYPTION_KEY.encode() if not ENCRYPTION_KEY.startswith(b'gAAAAA') else ENCRYPTION_KEY
-else:
-    ENCRYPTION_KEY = ENCRYPTION_KEY
+    # If it's a string, encode it to bytes
+    ENCRYPTION_KEY = ENCRYPTION_KEY.encode()
+elif not isinstance(ENCRYPTION_KEY, bytes):
+    # If it's neither str nor bytes, convert to bytes
+    ENCRYPTION_KEY = str(ENCRYPTION_KEY).encode()
 
 class User(Base):
     __tablename__ = "users"
@@ -27,6 +29,7 @@ class User(Base):
     todos = relationship("Todo", back_populates="user", cascade="all, delete-orphan")
     notifications = relationship("Notification", back_populates="user", cascade="all, delete-orphan")
     dashboard_cache = relationship("DashboardCache", back_populates="user", cascade="all, delete-orphan", uselist=False)
+    push_subscriptions = relationship("PushSubscription", cascade="all, delete-orphan")
 
 class ServiceToken(Base):
     __tablename__ = "service_tokens"
@@ -96,4 +99,17 @@ class DashboardCache(Base):
     
     # Relationship
     user = relationship("User", back_populates="dashboard_cache")
+
+class PushSubscription(Base):
+    __tablename__ = "push_subscriptions"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    endpoint = Column(Text, nullable=False)
+    p256dh = Column(Text, nullable=False)  # Public key
+    auth = Column(Text, nullable=False)  # Auth secret
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    
+    # Relationship
+    user = relationship("User")
 

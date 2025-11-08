@@ -1,8 +1,9 @@
-import { Navigate } from 'react-router-dom';
+import { Navigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext.jsx';
 
 const ProtectedRoute = ({ children }) => {
   const { isAuthenticated, isLoading, user } = useAuth();
+  const location = useLocation();
 
   if (isLoading) {
     return (
@@ -17,7 +18,9 @@ const ProtectedRoute = ({ children }) => {
   }
 
   // If user is authenticated but profile is not complete, redirect to profile setup
-  if (user && !user.profileComplete) {
+  // Check both user.profileComplete and localStorage
+  const profileComplete = user?.profileComplete || localStorage.getItem('profile_complete') === 'true';
+  if (user && !profileComplete && location.pathname !== '/profile-setup') {
     return <Navigate to="/profile-setup" replace />;
   }
 

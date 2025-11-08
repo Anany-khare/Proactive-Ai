@@ -1,6 +1,6 @@
 import { NavLink } from 'react-router-dom';
 import { navItems } from '../routes.jsx';
-import { Home, MessageCircle, User } from 'lucide-react';
+import { Home, MessageCircle, User, Mail, Calendar } from 'lucide-react';
 import { useState } from 'react';
 
 const Sidebar = ({ isCollapsed, onToggle }) => {
@@ -17,18 +17,6 @@ const Sidebar = ({ isCollapsed, onToggle }) => {
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
     >
-      <div className="flex items-center px-4 lg:px-6 py-4 border-b border-gray-200 dark:border-gray-800">
-        {/* Logo - always visible */}
-        <div className="w-8 h-8 bg-gradient-to-br from-primary-500 to-primary-600 rounded-lg flex items-center justify-center flex-shrink-0">
-          <span className="text-white font-bold text-sm">P</span>
-        </div>
-        
-        {/* Text - only when expanded or hovered */}
-        {showExpanded && (
-          <span className="font-semibold text-gray-900 dark:text-gray-100 ml-2">Proactive AI</span>
-        )}
-      </div>
-
       <nav className="mt-6 px-3 flex-1">
         <ul className="space-y-2">
           {navItems.map((item) => (
@@ -43,6 +31,8 @@ const Sidebar = ({ isCollapsed, onToggle }) => {
               >
                 <span className="mr-3 text-gray-600 dark:text-gray-300">
                   {item.icon === 'home' && <Home size={20} />}
+                  {item.icon === 'mail' && <Mail size={20} />}
+                  {item.icon === 'calendar' && <Calendar size={20} />}
                   {item.icon === 'message-circle' && <MessageCircle size={20} />}
                   {item.icon === 'settings' && <User size={20} />}
                 </span>

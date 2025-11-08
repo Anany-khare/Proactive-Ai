@@ -11,9 +11,19 @@ const Navbar = () => {
 
   return (
     <header className="bg-white dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 px-4 lg:px-6 py-4">
-      <div className="flex items-center justify-end space-x-4">
-        {/* Theme Toggle */}
-        <ThemeToggle />
+      <div className="flex items-center justify-between">
+        {/* Logo and Name - Left Side */}
+        <div className="flex items-center space-x-3">
+          <div className="w-10 h-10 bg-gradient-to-br from-primary-500 to-primary-600 rounded-lg flex items-center justify-center flex-shrink-0">
+            <span className="text-white font-bold text-lg">P</span>
+          </div>
+          <span className="font-semibold text-xl text-gray-900 dark:text-gray-100">Proactive AI</span>
+        </div>
+
+        {/* Right Side Actions */}
+        <div className="flex items-center space-x-4">
+          {/* Theme Toggle */}
+          <ThemeToggle />
         
         {/* Notification Bell */}
         <button className="relative p-2 rounded-lg text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors">
@@ -31,6 +41,7 @@ const Navbar = () => {
             </span>
           </div>
         )}
+        </div>
       </div>
     </header>
   );

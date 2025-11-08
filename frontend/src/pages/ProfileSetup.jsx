@@ -43,12 +43,26 @@ const ProfileSetup = () => {
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
+    console.log('Profile setup form submitted', profileData);
     
-    const result = await completeProfile(profileData);
-    if (result.success) {
-      navigate('/dashboard');
-    } else {
-      setError(result.error || 'Profile setup failed');
+    try {
+      const result = await completeProfile(profileData);
+      console.log('Complete profile result:', result);
+      
+      if (result && result.success) {
+        console.log('Navigating to dashboard...');
+        // Small delay to ensure state is updated
+        setTimeout(() => {
+          navigate('/dashboard', { replace: true });
+        }, 200);
+      } else {
+        const errorMsg = result?.error || 'Profile setup failed';
+        console.error('Profile setup failed:', errorMsg);
+        setError(errorMsg);
+      }
+    } catch (error) {
+      console.error('Error in handleSubmit:', error);
+      setError(error.message || 'An error occurred during profile setup');
     }
   };
 

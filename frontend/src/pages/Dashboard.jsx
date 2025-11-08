@@ -1,11 +1,29 @@
 import React from 'react';
 import { Card, CardHeader, CardTitle, CardContent } from '../components/ui/card.jsx';
 import { useContextualData } from '../hooks/useContextualData.jsx';
+import { useRealtimeUpdates } from '../hooks/useRealtimeUpdates.jsx';
 import { Mail, Calendar, CheckSquare, Bell, Lightbulb, Clock, User, AlertCircle } from 'lucide-react';
 import { Button } from '../components/ui/button.jsx';
 
 const Dashboard = () => {
-  const { dailyBrief, emails, meetings, todos, notifications, suggestions, isLoading, error } = useContextualData();
+  const { dailyBrief, emails, meetings, todos, notifications, suggestions, isLoading, error, refetch } = useContextualData();
+  
+  // Real-time updates
+  const handleEmailUpdate = (newEmails) => {
+    // Refresh dashboard data when new emails arrive
+    if (refetch) {
+      refetch();
+    }
+  };
+
+  const handleMeetingUpdate = (newMeetings) => {
+    // Refresh dashboard data when new meetings arrive
+    if (refetch) {
+      refetch();
+    }
+  };
+
+  const { connected } = useRealtimeUpdates(handleEmailUpdate, handleMeetingUpdate);
 
   if (isLoading) {
     return (
@@ -37,10 +55,18 @@ const Dashboard = () => {
   return (
     <div className="space-y-6">
       {/* Page Header */}
-      <div>
-        <h1 className="text-3xl font-bold text-gray-900 dark:text-gray-100">Dashboard</h1>
-        {dailyBrief && (
-          <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">{dailyBrief.date}</p>
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-3xl font-bold text-gray-900 dark:text-gray-100">Dashboard</h1>
+          {dailyBrief && (
+            <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">{dailyBrief.date}</p>
+          )}
+        </div>
+        {connected && (
+          <div className="flex items-center space-x-2 text-green-600 dark:text-green-400">
+            <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
+            <span className="text-sm">Real-time updates active</span>
+          </div>
         )}
       </div>
 
@@ -79,7 +105,7 @@ const Dashboard = () => {
               {emails.slice(0, 5).map((email) => (
                 <div
                   key={email.id}
-                  className="p-3 rounded-lg border border-gray-200 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors cursor-pointer"
+                  className="p-3 rounded-lg border border-gray-200 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors"
                 >
                     <div className="flex items-start justify-between mb-1">
                     <div className="flex items-center space-x-2 flex-1 min-w-0">
@@ -97,7 +123,16 @@ const Dashboard = () => {
                       {email.time}
                     </span>
                   </div>
-                  <p className="text-sm font-medium text-gray-800 dark:text-gray-200 mb-1">
+                  <p 
+                    className="text-sm font-medium text-gray-800 dark:text-gray-200 mb-1 cursor-pointer hover:text-primary-600 dark:hover:text-primary-400"
+                    onClick={() => {
+                      if (email.thread_id) {
+                        window.location.href = `/emails?thread=${email.thread_id}`;
+                      } else {
+                        window.location.href = `/emails/${email.id}`;
+                      }
+                    }}
+                  >
                     {email.subject}
                   </p>
                   <p className="text-xs text-gray-600 dark:text-gray-400 line-clamp-2">
