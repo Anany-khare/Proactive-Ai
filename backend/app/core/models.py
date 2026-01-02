@@ -4,15 +4,19 @@ from sqlalchemy.sql import func
 from app.core.database import Base
 from cryptography.fernet import Fernet
 import os
+from app.core.config import settings
 
 # Encryption key for sensitive data (in production, store this securely)
-ENCRYPTION_KEY = os.getenv("ENCRYPTION_KEY", Fernet.generate_key().decode())
+# Get encryption key from settings
+ENCRYPTION_KEY = settings.ENCRYPTION_KEY
+if not ENCRYPTION_KEY:
+    print("WARNING: ENCRYPTION_KEY not set in .env. Tokens will be lost on restart.")
+    # Fallback to random key for development only
+    ENCRYPTION_KEY = Fernet.generate_key().decode()
+
 if isinstance(ENCRYPTION_KEY, str):
     # If it's a string, encode it to bytes
     ENCRYPTION_KEY = ENCRYPTION_KEY.encode()
-elif not isinstance(ENCRYPTION_KEY, bytes):
-    # If it's neither str nor bytes, convert to bytes
-    ENCRYPTION_KEY = str(ENCRYPTION_KEY).encode()
 
 class User(Base):
     __tablename__ = "users"
