@@ -39,7 +39,12 @@ def get_google_credentials(user: User, db: Session) -> dict:
         needs_refresh = False
         if service_token.expires_at:
             # Check stored expiry time
-            if service_token.expires_at < datetime.now(timezone.utc):
+            # Ensure expires_at is timezone-aware
+            expiry = service_token.expires_at
+            if expiry.tzinfo is None:
+                expiry = expiry.replace(tzinfo=timezone.utc)
+            
+            if expiry < datetime.now(timezone.utc):
                 needs_refresh = True
                 print(f"Token expired for user {user.id} (expired at {service_token.expires_at})")
         else:
@@ -406,6 +411,22 @@ async def get_emails(
     db: Session = Depends(get_db)
 ):
     """Get user's emails"""
+    # Check cache first
+    cache = db.query(DashboardCache).filter(DashboardCache.user_id == current_user.id).first()
+    if cache and cache.last_updated:
+        # Check if cache is fresh (5 minutes)
+        now = datetime.now(timezone.utc)
+        cache_time = cache.last_updated
+        if cache_time.tzinfo is None:
+            cache_time = cache_time.replace(tzinfo=timezone.utc)
+            
+        if (now - cache_time).total_seconds() < 300:
+            cache_data = cache.data if isinstance(cache.data, dict) else {}
+            if 'emails' in cache_data and cache_data['emails']:
+                print(f"Returning cached emails for user {current_user.id}")
+                # Convert dict back to EmailResponse objects
+                return [EmailResponse(**e) for e in cache_data['emails']]
+
     credentials = get_google_credentials(current_user, db)
     if not credentials:
         # Return empty list instead of mock data when no credentials
@@ -415,14 +436,15 @@ async def get_emails(
         gmail_service = GmailService(credentials)
         
         # Try unread first, then recent if no unread
+        print(f"Fetching fresh emails for user {current_user.id}...")
         emails_data = gmail_service.get_unread_emails(max_results=10)
         if not emails_data or len(emails_data) == 0:
             emails_data = gmail_service.get_recent_emails(max_results=10)
         
         if not emails_data:
             return []
-        
-        return [EmailResponse(
+            
+        emails_response = [EmailResponse(
             id=email.get('id', ''), 
             from_email=email.get('from', 'Unknown'), 
             subject=email.get('subject', ''), 
@@ -431,8 +453,27 @@ async def get_emails(
             unread=email.get('unread', True), 
             timestamp=email.get('time', ''),
             time=email.get('time', ''),
-            thread_id=email.get('thread_id')  # Extract thread_id
+            thread_id=email.get('thread_id')
         ) for email in emails_data]
+
+        # Update cache
+        try:
+            now = datetime.now(timezone.utc)
+            if cache:
+                cache_data = cache.data if isinstance(cache.data, dict) else {}
+                cache_data['emails'] = [e.dict() for e in emails_response]
+                cache.data = cache_data
+                cache.last_updated = now
+            else:
+                # If no cache exists, we can't easily create one without other data
+                # So we leave it for the main dashboard endpoint to create
+                pass
+            db.commit()
+        except Exception as e:
+            print(f"Failed to update cache: {e}")
+            # Continue even if cache update fails
+        
+        return emails_response
     except Exception as e:
         import traceback
         error_details = traceback.format_exc()

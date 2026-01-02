@@ -33,7 +33,7 @@ class GmailService:
         self.service = build('gmail', 'v1', credentials=creds)
     
     def get_unread_emails(self, max_results: int = 5) -> List[Dict]:
-        """Fetch unread emails"""
+        """Fetch unread emails using batch requests"""
         try:
             print(f"Fetching unread emails (max_results={max_results})...")
             results = self.service.users().messages().list(
@@ -50,68 +50,58 @@ class GmailService:
                 print("No unread messages found")
                 return emails
             
+            # Use batch request to fetch all emails at once
+            email_details = {}
+            
+            def callback(request_id, response, exception):
+                if exception:
+                    print(f"Error in batch request: {exception}")
+                else:
+                    email_details[request_id] = response
+
+            batch = self.service.new_batch_http_request(callback=callback)
+            
             for msg in messages:
+                batch.add(self.service.users().messages().get(
+                    userId='me',
+                    id=msg['id'],
+                    format='metadata',
+                    metadataHeaders=['From', 'Subject', 'Date', 'LabelIds']
+                ), request_id=msg['id'])
+            
+            try:
+                batch.execute()
+            except Exception as e:
+                print(f"Batch execution failed: {e}")
+                # Fallback to serial execution if batch fails
+                return self._get_emails_serial(messages)
+            
+            # Process results
+            for msg in messages:
+                msg_id = msg['id']
+                if msg_id not in email_details:
+                    continue
+                    
+                message = email_details[msg_id]
                 try:
-                    message = self.service.users().messages().get(
-                        userId='me',
-                        id=msg['id'],
-                        format='metadata',
-                        metadataHeaders=['From', 'Subject', 'Date']
-                    ).execute()
-                    
-                    headers = message['payload'].get('headers', [])
-                    from_email = next((h['value'] for h in headers if h['name'] == 'From'), 'Unknown')
-                    subject = next((h['value'] for h in headers if h['name'] == 'Subject'), 'No Subject')
-                    date_str = next((h['value'] for h in headers if h['name'] == 'Date'), '')
-                    
-                    # Get snippet as preview
-                    snippet = message.get('snippet', '')
-                    
-                    # Check if actually unread
-                    label_ids = message.get('labelIds', [])
-                    is_unread = 'UNREAD' in label_ids
-                    
-                    # Determine priority (simple heuristic)
-                    priority = 'medium'
-                    if any(word in subject.lower() for word in ['urgent', 'important', 'asap', 'action required']):
-                        priority = 'high'
-                    
-                    # Parse date
-                    try:
-                        date_obj = parsedate_to_datetime(date_str) if date_str else datetime.now()
-                        time_ago = self._get_time_ago(date_obj)
-                    except:
-                        time_ago = "Unknown"
-                    
-                    emails.append({
-                        'id': message['id'],
-                        'thread_id': message.get('threadId', ''),
-                        'from': from_email.split('<')[0].strip().strip('"') or from_email,
-                        'subject': subject,
-                        'preview': snippet[:100] + '...' if len(snippet) > 100 else snippet,
-                        'priority': priority,
-                        'unread': is_unread,
-                        'time': time_ago
-                    })
+                    emails.append(self._parse_email_message(message))
                 except Exception as e:
-                    print(f"Error processing message {msg.get('id', 'unknown')}: {e}")
+                    print(f"Error parsing message {msg_id}: {e}")
                     continue
             
             print(f"Successfully processed {len(emails)} emails")
             return emails
         except HttpError as error:
             print(f'Gmail API error: {error}')
-            print(f'Error details: {error.error_details if hasattr(error, "error_details") else "No details"}')
-            print(f'Error status code: {error.resp.status if hasattr(error, "resp") else "Unknown"}')
-            raise  # Re-raise to let caller handle it
+            raise
         except Exception as error:
             print(f'Unexpected error fetching emails: {error}')
             import traceback
             traceback.print_exc()
-            raise  # Re-raise to let caller handle it
+            raise
     
     def get_recent_emails(self, max_results: int = 5) -> List[Dict]:
-        """Fetch recent emails (both read and unread)"""
+        """Fetch recent emails (both read and unread) using batch requests"""
         try:
             print(f"Fetching recent emails (max_results={max_results})...")
             results = self.service.users().messages().list(
@@ -127,65 +117,103 @@ class GmailService:
                 print("No recent messages found")
                 return emails
             
+            # Use batch request
+            email_details = {}
+            
+            def callback(request_id, response, exception):
+                if exception:
+                    print(f"Error in batch request: {exception}")
+                else:
+                    email_details[request_id] = response
+
+            batch = self.service.new_batch_http_request(callback=callback)
+            
             for msg in messages:
+                batch.add(self.service.users().messages().get(
+                    userId='me',
+                    id=msg['id'],
+                    format='metadata',
+                    metadataHeaders=['From', 'Subject', 'Date', 'LabelIds']
+                ), request_id=msg['id'])
+            
+            batch.execute()
+            
+            # Process results
+            for msg in messages:
+                msg_id = msg['id']
+                if msg_id not in email_details:
+                    continue
+                    
+                message = email_details[msg_id]
                 try:
-                    message = self.service.users().messages().get(
-                        userId='me',
-                        id=msg['id'],
-                        format='metadata',
-                        metadataHeaders=['From', 'Subject', 'Date']
-                    ).execute()
-                    
-                    headers = message['payload'].get('headers', [])
-                    from_email = next((h['value'] for h in headers if h['name'] == 'From'), 'Unknown')
-                    subject = next((h['value'] for h in headers if h['name'] == 'Subject'), 'No Subject')
-                    date_str = next((h['value'] for h in headers if h['name'] == 'Date'), '')
-                    
-                    # Get snippet as preview
-                    snippet = message.get('snippet', '')
-                    
-                    # Check if actually unread
-                    label_ids = message.get('labelIds', [])
-                    is_unread = 'UNREAD' in label_ids
-                    
-                    # Determine priority (simple heuristic)
-                    priority = 'medium'
-                    if any(word in subject.lower() for word in ['urgent', 'important', 'asap', 'action required']):
-                        priority = 'high'
-                    
-                    # Parse date
-                    try:
-                        date_obj = parsedate_to_datetime(date_str) if date_str else datetime.now()
-                        time_ago = self._get_time_ago(date_obj)
-                    except:
-                        time_ago = "Unknown"
-                    
-                    emails.append({
-                        'id': message['id'],
-                        'thread_id': message.get('threadId', ''),
-                        'from': from_email.split('<')[0].strip().strip('"') or from_email,
-                        'subject': subject,
-                        'preview': snippet[:100] + '...' if len(snippet) > 100 else snippet,
-                        'priority': priority,
-                        'unread': is_unread,
-                        'time': time_ago
-                    })
+                    emails.append(self._parse_email_message(message))
                 except Exception as e:
-                    print(f"Error processing message {msg.get('id', 'unknown')}: {e}")
+                    print(f"Error parsing message {msg_id}: {e}")
                     continue
             
             print(f"Successfully processed {len(emails)} emails")
             return emails
         except HttpError as error:
             print(f'Gmail API error: {error}')
-            print(f'Error details: {error.error_details if hasattr(error, "error_details") else "No details"}')
-            print(f'Error status code: {error.resp.status if hasattr(error, "resp") else "Unknown"}')
-            raise  # Re-raise to let caller handle it
+            raise
         except Exception as error:
             print(f'Unexpected error fetching emails: {error}')
             import traceback
             traceback.print_exc()
-            raise  # Re-raise to let caller handle it
+            raise
+
+    def _get_emails_serial(self, messages):
+        """Fallback method using serial requests"""
+        emails = []
+        for msg in messages:
+            try:
+                message = self.service.users().messages().get(
+                    userId='me',
+                    id=msg['id'],
+                    format='metadata',
+                    metadataHeaders=['From', 'Subject', 'Date']
+                ).execute()
+                emails.append(self._parse_email_message(message))
+            except Exception as e:
+                print(f"Error processing message {msg['id']}: {e}")
+        return emails
+
+    def _parse_email_message(self, message):
+        """Helper to parse a single email message"""
+        headers = message['payload'].get('headers', [])
+        from_email = next((h['value'] for h in headers if h['name'] == 'From'), 'Unknown')
+        subject = next((h['value'] for h in headers if h['name'] == 'Subject'), 'No Subject')
+        date_str = next((h['value'] for h in headers if h['name'] == 'Date'), '')
+        
+        # Get snippet as preview
+        snippet = message.get('snippet', '')
+        
+        # Check if actually unread
+        label_ids = message.get('labelIds', [])
+        is_unread = 'UNREAD' in label_ids
+        
+        # Determine priority (simple heuristic)
+        priority = 'medium'
+        if any(word in subject.lower() for word in ['urgent', 'important', 'asap', 'action required']):
+            priority = 'high'
+        
+        # Parse date
+        try:
+            date_obj = parsedate_to_datetime(date_str) if date_str else datetime.now()
+            time_ago = self._get_time_ago(date_obj)
+        except:
+            time_ago = "Unknown"
+        
+        return {
+            'id': message['id'],
+            'thread_id': message.get('threadId', ''),
+            'from': from_email.split('<')[0].strip().strip('"') or from_email,
+            'subject': subject,
+            'preview': snippet[:100] + '...' if len(snippet) > 100 else snippet,
+            'priority': priority,
+            'unread': is_unread,
+            'time': time_ago
+        }
     
     def _get_time_ago(self, date_obj: datetime) -> str:
         """Calculate time ago string"""
