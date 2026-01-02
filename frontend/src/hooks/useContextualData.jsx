@@ -1,56 +1,46 @@
-import { useEffect, useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { dashboardAPI } from '../utils/api.jsx';
 
 // Hook for fetching contextual dashboard data
 // This fetches real data from the backend API
 export function useContextualData() {
-  const [data, setData] = useState({
-    dailyBrief: null,
-    emails: [],
-    meetings: [],
-    todos: [],
-    notifications: [],
-    suggestions: [],
-    isLoading: true,
-    error: null,
-  });
+  const queryClient = useQueryClient();
 
-  const fetchContextualData = async () => {
-    try {
-      setData(prev => ({ ...prev, isLoading: true, error: null }));
+  const { data, isLoading, error, refetch } = useQuery({
+    queryKey: ['dashboard-contextual'],
+    queryFn: async () => {
       const response = await dashboardAPI.getContextualData();
-      setData({
+      return {
         dailyBrief: response.data.dailyBrief,
         emails: response.data.emails || [],
         meetings: response.data.meetings || [],
         todos: response.data.todos || [],
         notifications: response.data.notifications || [],
         suggestions: response.data.suggestions || [],
-        isLoading: false,
-        error: null,
-      });
-    } catch (error) {
-      console.error('Error fetching contextual data:', error);
-      setData(prev => ({
-        ...prev,
-        isLoading: false,
-        error: error.response?.data?.detail || error.message || 'Failed to fetch data',
-      }));
-    }
+      };
+    },
+    // Use staleTime from global config (5 minutes) or override here
+    staleTime: 5 * 60 * 1000,
+    // Data remains in cache/memory
+    gcTime: 10 * 60 * 1000,
+    retry: 1,
+  });
+
+  // Default empty state to prevent null crashes while loading
+  const defaultData = {
+    dailyBrief: null,
+    emails: [],
+    meetings: [],
+    todos: [],
+    notifications: [],
+    suggestions: [],
   };
 
-  useEffect(() => {
-    fetchContextualData();
-    
-    // Set up polling to refresh data periodically (every 5 minutes)
-    const interval = setInterval(fetchContextualData, 5 * 60 * 1000);
-    
-    return () => clearInterval(interval);
-  }, []);
-
   return {
-    ...data,
-    refetch: fetchContextualData, // Allow manual refresh
+    ...(data || defaultData),
+    isLoading,
+    error: error?.response?.data?.detail || error?.message || null,
+    refetch,
   };
 }
 

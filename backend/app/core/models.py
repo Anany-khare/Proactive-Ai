@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, DateTime, Boolean, Text, ForeignKey, JSON
+from sqlalchemy import Column, Integer, String, DateTime, Boolean, Text, ForeignKey, JSON, Index
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.core.database import Base
@@ -27,6 +27,7 @@ class User(Base):
     picture = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    last_synced_at = Column(DateTime(timezone=True), nullable=True) # For Sync Circuit Breaker
     
     # Relationships
     service_tokens = relationship("ServiceToken", back_populates="user", cascade="all, delete-orphan")
@@ -34,6 +35,8 @@ class User(Base):
     notifications = relationship("Notification", back_populates="user", cascade="all, delete-orphan")
     dashboard_cache = relationship("DashboardCache", back_populates="user", cascade="all, delete-orphan", uselist=False)
     push_subscriptions = relationship("PushSubscription", cascade="all, delete-orphan")
+    emails = relationship("Email", back_populates="user", cascade="all, delete-orphan")
+    meetings = relationship("Meeting", back_populates="user", cascade="all, delete-orphan")
 
 class ServiceToken(Base):
     __tablename__ = "service_tokens"
@@ -47,6 +50,10 @@ class ServiceToken(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     
+    __table_args__ = (
+        Index('idx_token_user_service', 'user_id', 'service_name'),
+    )
+
     # Relationship
     user = relationship("User", back_populates="service_tokens")
     
@@ -116,4 +123,45 @@ class PushSubscription(Base):
     
     # Relationship
     user = relationship("User")
+
+class Email(Base):
+    __tablename__ = "emails"
+    
+    id = Column(String, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    thread_id = Column(String, index=True)
+    subject = Column(String, nullable=True)
+    sender = Column(String, nullable=True)
+    preview = Column(Text, nullable=True)
+    received_at = Column(DateTime(timezone=True), index=True)
+    is_read = Column(Boolean, default=False)
+    priority = Column(String, default="medium")  # high, medium, low
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    
+    __table_args__ = (
+        Index('idx_email_user_date', 'user_id', 'received_at'),
+    )
+
+    # Relationship
+    user = relationship("User", back_populates="emails")
+
+class Meeting(Base):
+    __tablename__ = "meetings"
+    
+    id = Column(String, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    title = Column(String, nullable=True)
+    start_time = Column(DateTime(timezone=True), index=True)
+    end_time = Column(DateTime(timezone=True))
+    location = Column(String, nullable=True)
+    attendees = Column(JSON, nullable=True)
+    description = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    
+    __table_args__ = (
+        Index('idx_meeting_user_start', 'user_id', 'start_time'),
+    )
+
+    # Relationship
+    user = relationship("User", back_populates="meetings")
 

@@ -1,7 +1,13 @@
 from fastapi import FastAPI
+# Force reload
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
 from app.api import auth, dashboard, emails, meetings, realtime, push, admin
+
+from app.core.database import Base, engine
+
+# Create tables
+Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="MajorProject API", version="1.0.0")
 

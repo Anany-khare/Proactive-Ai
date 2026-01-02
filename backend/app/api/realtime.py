@@ -1,4 +1,113 @@
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, Request
+from fastapi.responses import StreamingResponse
+from sqlalchemy.orm import Session
+from app.core.database import get_db
+from app.core.models import User as UserModel
+from app.core.security import verify_token
+# from app.api.dashboard import get_google_credentials # This should be removed if present
+from app.core.config import settings
+import asyncio
+import json
+import logging
+from typing import AsyncGenerator
+from app.core.cache import cache
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter(prefix="/api/realtime", tags=["realtime"])
+
+# Initialize Redis (Removed, using global cache)
+# redis_client = ...
+
+
+async def event_generator(user_id: int) -> AsyncGenerator[str, None]:
+    """Generate Server-Sent Events using Redis Pub/Sub"""
+    try:
+        # Send initial connection status
+        yield f"data: {json.dumps({'type': 'status', 'status': 'connected', 'message': 'Real-time updates active'})}\n\n"
+        
+        if not cache.enabled:
+             # Redis down fallback -> Degraded Mode
+             logger.warning("Redis unavailable for realtime updates. Fallback to heartbeat.")
+             yield f"data: {json.dumps({'type': 'status', 'status': 'degraded', 'message': 'Live updates paused (Degraded maintenance mode)'})}\n\n"
+             while True:
+                await asyncio.sleep(30)
+                yield f"data: {json.dumps({'type': 'heartbeat'})}\n\n"
+                
+        # Connection active
+        pubsub = cache.client.pubsub()
+        channel = f"updates:{user_id}"
+        await pubsub.subscribe(channel)
+
+        try:
+            async for message in pubsub.listen():
+                if message['type'] == 'message':
+                    data = message['data']
+                    yield f"data: {data}\n\n"
+        except asyncio.CancelledError:
+            raise
+        finally:
+            await pubsub.unsubscribe(channel)
+            await pubsub.close()
+            
+    except Exception as e:
+        logger.error(f"Realtime error: {e}")
+        yield f"data: {json.dumps({
+            'type': 'error',
+            'message': 'Realtime service error'
+        })}\n\n"
+
+async def get_user_from_request(request: Request, db: Session) -> UserModel:
+    """Extract user from request for SSE"""
+    # Force Headers for security (avoid log leaks)
+    token = None
+    auth_header = request.headers.get("Authorization")
+    if auth_header and auth_header.startswith("Bearer "):
+        token = auth_header.split(" ")[1]
+    
+    if not token:
+        # Strict: Do not accept query params due to logging risk
+        return None
+    
+    try:
+        payload = verify_token(token)
+        user_id = int(payload.get("sub"))
+        user = db.query(UserModel).filter(UserModel.id == user_id).first()
+        return user
+    except Exception:
+        return None
+
+@router.get("/stream")
+async def stream_updates(
+    request: Request,
+    db: Session = Depends(get_db)
+):
+    """Server-Sent Events endpoint for real-time updates"""
+    current_user = await get_user_from_request(request, db)
+    
+    if not current_user:
+        async def error_generator():
+            yield f"data: {json.dumps({'type': 'error', 'message': 'Unauthorized'})}\n\n"
+        
+        return StreamingResponse(
+            error_generator(),
+            media_type="text/event-stream",
+            status_code=401,
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+            }
+        )
+    
+    return StreamingResponse(
+        event_generator(current_user.id),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no"
+        }
+    )
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from app.core.database import get_db
