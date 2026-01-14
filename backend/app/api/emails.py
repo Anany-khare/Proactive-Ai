@@ -407,7 +407,8 @@ async def get_all_emails(
     # OPTIMIZATION: If no query, serve from DB for instant load
     if not query:
         # Trigger background sync if needed (non-blocking mainly)
-        trigger_sync_if_needed(current_user, db, background_tasks, force_check=False)
+        # Force check if we are on the first page
+        trigger_sync_if_needed(current_user, db, background_tasks, force_check=(not page_token))
         
         # Decode page_token (cursor) if present
         offset = 0
@@ -430,7 +431,6 @@ async def get_all_emails(
         
         # Apply limit/offset
         db_emails = emails_query.offset(offset).limit(max_results).options(defer(Email.body)).all()
-        print(f"DEBUG: Fetched {len(db_emails)} emails from DB for user {current_user.id} (Offset: {offset})")
         
         # Check if we have more
         has_more = len(db_emails) == max_results
@@ -441,7 +441,6 @@ async def get_all_emails(
             
         emails_list = []
         for e in db_emails:
-            print(f"DEBUG Email {e.id}: is_read={e.is_read}")
             emails_list.append(EmailResponse(
                 id=e.id,
                 from_email=e.sender or "Unknown",

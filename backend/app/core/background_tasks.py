@@ -149,7 +149,8 @@ def sync_user_data(user_id: int):
             
             # 2. Publish Realtime Event
             update_event = {
-                "type": "REFRESH_DASHBOARD",
+                "type": "emails",
+                "data": {"count": 1}, # Dummy data to satisfy frontend check
                 "user_id": user_id,
                 "timestamp": datetime.now().isoformat()
             }

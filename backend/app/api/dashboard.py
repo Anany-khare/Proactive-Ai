@@ -111,7 +111,7 @@ def trigger_sync_if_needed(current_user: User, db: Session, background_tasks: Ba
         # Check staleness
         if current_user.last_synced_at:
              time_since_sync = datetime.now() - current_user.last_synced_at.replace(tzinfo=None)
-             if time_since_sync.total_seconds() > 300: # 5 mins
+             if time_since_sync.total_seconds() > 30: # 30s for "Live" feel
                  should_trigger_sync = True
         else:
              should_trigger_sync = True
@@ -142,7 +142,7 @@ def trigger_sync_if_needed(current_user: User, db: Session, background_tasks: Ba
                     print("BackgroundTasks not provided, running sync synchronously (might block)")
                     sync_user_data(current_user.id)
                     
-                cache.set(sync_lock_key, "1", ex=300)
+                cache.set(sync_lock_key, "1", ex=30)
                 return True
             except Exception as e:
                 print(f"Background sync trigger failed: {e}")
@@ -182,7 +182,7 @@ async def get_contextual_data(
     db_emails = db.query(Email).filter(
         Email.user_id == current_user.id,
         Email.is_read == False
-    ).order_by(Email.received_at.desc()).limit(10).all()
+    ).order_by(Email.received_at.desc()).limit(50).all()
     emails_response = [EmailResponse(
         id=e.id,
         from_email=e.sender,

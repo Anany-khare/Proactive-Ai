@@ -9,6 +9,7 @@ import { Mail, MessageSquare, Loader2, Search } from 'lucide-react';
 import { Button } from '../components/ui/button.jsx';
 import { useSearchParams, useParams, useLocation } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query'; // Import query client
+import { useRealtimeUpdates } from '../hooks/useRealtimeUpdates.jsx'; // Import real-time hook
 
 const Emails = () => {
   const { id } = useParams();
@@ -26,6 +27,16 @@ const Emails = () => {
   // Use the custom hook for fetching data with caching
   // We pass searchQuery to the hook so it automatically refetches when query changes
   const { emails, isLoading, error, refetch, deleteEmail, hasNextPage, fetchNextPage, isFetchingNextPage } = useEmails(searchQuery);
+
+  // Real-time updates integration
+  const handleRealtimeEmailUpdate = React.useCallback(() => {
+    console.log("Real-time email update received, refreshing list...");
+    queryClient.invalidateQueries({ queryKey: ['emails'] });
+    // Also context
+    queryClient.invalidateQueries({ queryKey: ['dashboard-contextual'] });
+  }, [queryClient]);
+
+  useRealtimeUpdates(handleRealtimeEmailUpdate); // Listen for updates
 
   // Sync URL params with state
   useEffect(() => {
