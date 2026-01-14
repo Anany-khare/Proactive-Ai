@@ -6,7 +6,7 @@ import { ChevronLeft, ChevronRight, Plus, Calendar, Clock, MapPin, Users } from 
 import { Dialog, DialogTrigger, DialogContent, DialogHeader, DialogTitle } from './ui/dialog.jsx';
 import { Loader2 } from 'lucide-react';
 
-const CalendarView = ({ view = 'week', onMeetingClick, onCreateMeeting }) => {
+const CalendarView = ({ view = 'week', onMeetingClick, onCreateMeeting, onViewChange }) => {
   const [events, setEvents] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -21,6 +21,7 @@ const CalendarView = ({ view = 'week', onMeetingClick, onCreateMeeting }) => {
     attendees: []
   });
   const [isCreating, setIsCreating] = useState(false);
+  // const { toast } = useToast(); // Hook not available
 
   useEffect(() => {
     fetchEvents();
@@ -34,14 +35,25 @@ const CalendarView = ({ view = 'week', onMeetingClick, onCreateMeeting }) => {
       if (view === 'week') {
         const weekStart = getWeekStart(currentDate).toISOString();
         response = await meetingAPI.getWeeklyEvents(weekStart);
-      } else {
+      } else if (view === 'month') {
         const month = `${currentDate.getFullYear()}-${String(currentDate.getMonth() + 1).padStart(2, '0')}`;
         response = await meetingAPI.getMonthlyEvents(month);
+      } else if (view === 'day') {
+        const start = new Date(currentDate);
+        start.setHours(0, 0, 0, 0);
+        const end = new Date(currentDate);
+        end.setHours(23, 59, 59, 999);
+        response = await meetingAPI.getEventsByRange(start.toISOString(), end.toISOString());
       }
       setEvents(response.data || []);
     } catch (err) {
       console.error('Error fetching events:', err);
       setError('Failed to load events');
+      // toast({
+      //   title: "Error",
+      //   description: "Failed to load calendar events",
+      //   variant: "destructive",
+      // });
     } finally {
       setLoading(false);
     }
@@ -97,7 +109,10 @@ const CalendarView = ({ view = 'week', onMeetingClick, onCreateMeeting }) => {
   };
 
   const getEventsForDate = (date) => {
-    const dateStr = date.toISOString().split('T')[0];
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    const dateStr = `${year}-${month}-${day}`;
     return events.filter(event => event.date === dateStr);
   };
 
@@ -112,12 +127,12 @@ const CalendarView = ({ view = 'week', onMeetingClick, onCreateMeeting }) => {
       const attendees = newMeeting.attendees
         ? newMeeting.attendees.split(',').map(e => e.trim()).filter(e => e)
         : [];
-      
+
       await meetingAPI.createMeeting({
         ...newMeeting,
         attendees
       });
-      
+
       setShowCreateDialog(false);
       setNewMeeting({
         title: '',
@@ -141,11 +156,15 @@ const CalendarView = ({ view = 'week', onMeetingClick, onCreateMeeting }) => {
     const newDate = new Date(currentDate);
     if (view === 'week') {
       newDate.setDate(newDate.getDate() + (direction === 'next' ? 7 : -7));
-    } else {
+    } else if (view === 'month') {
       newDate.setMonth(newDate.getMonth() + (direction === 'next' ? 1 : -1));
+    } else if (view === 'day') {
+      newDate.setDate(newDate.getDate() + (direction === 'next' ? 1 : -1));
     }
     setCurrentDate(newDate);
   };
+
+  const today = () => setCurrentDate(new Date());
 
   if (loading) {
     return (
@@ -295,20 +314,21 @@ const CalendarView = ({ view = 'week', onMeetingClick, onCreateMeeting }) => {
           {error && (
             <div className="text-red-600 dark:text-red-400 mb-4">{error}</div>
           )}
-          {view === 'week' ? (
-            <WeekView days={getWeekDays()} events={events} onMeetingClick={onMeetingClick} />
-          ) : (
-            <MonthView days={getMonthDays()} events={events} onMeetingClick={onMeetingClick} />
-          )}
+          {view === 'week' && <WeekView days={getWeekDays()} events={events} onMeetingClick={onMeetingClick} onViewChange={onViewChange} onDateChange={setCurrentDate} />}
+          {view === 'month' && <MonthView days={getMonthDays()} events={events} onMeetingClick={onMeetingClick} />}
+          {view === 'day' && <DayView date={currentDate} events={events} onMeetingClick={onMeetingClick} />}
         </CardContent>
       </Card>
     </div>
   );
 };
 
-const WeekView = ({ days, events, onMeetingClick }) => {
+const WeekView = ({ days, events, onMeetingClick, onViewChange, onDateChange }) => {
   const getEventsForDate = (date) => {
-    const dateStr = date.toISOString().split('T')[0];
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    const dateStr = `${year}-${month}-${day}`;
     return (events || []).filter(event => event.date === dateStr);
   };
 
@@ -316,22 +336,51 @@ const WeekView = ({ days, events, onMeetingClick }) => {
     <div className="grid grid-cols-7 gap-2">
       {days.map((day, index) => {
         const dayEvents = getEventsForDate(day);
+        const isToday = day.toDateString() === new Date().toDateString();
+        const displayEvents = dayEvents.slice(0, 2);
+        const remainingEvents = dayEvents.length - 2;
+
         return (
-          <div key={index} className="border border-gray-200 dark:border-gray-800 rounded-lg p-2 min-h-[200px]">
-            <div className="font-semibold text-sm mb-2 text-gray-900 dark:text-gray-100">
-              {day.toLocaleDateString('en-US', { weekday: 'short', day: 'numeric' })}
+          <div
+            key={index}
+            className={`border rounded-lg p-2 min-h-[200px] ${isToday
+              ? 'bg-blue-50/50 dark:bg-blue-900/10 border-blue-500 dark:border-blue-400 shadow-sm'
+              : 'border-gray-200 dark:border-gray-800'
+              }`}
+          >
+            <div className={`font-semibold text-sm mb-2 flex justify-between items-center ${isToday ? 'text-blue-700 dark:text-blue-300' : 'text-gray-900 dark:text-gray-100'
+              }`}>
+              <span>
+                {day.toLocaleDateString('en-US', { weekday: 'short', day: 'numeric' })}
+                {isToday && <span className="ml-2 text-xs font-normal text-blue-600 dark:text-blue-400">(Today)</span>}
+              </span>
             </div>
             <div className="space-y-1">
-              {dayEvents.map((event) => (
+              {displayEvents.map((event) => (
                 <div
                   key={event.id}
-                  onClick={() => onMeetingClick && onMeetingClick(event)}
-                  className="p-2 bg-primary-50 dark:bg-primary-900/20 rounded text-xs cursor-pointer hover:bg-primary-100 dark:hover:bg-primary-900/30"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onMeetingClick && onMeetingClick(event);
+                  }}
+                  className="p-2 bg-white dark:bg-gray-800 border border-gray-100 dark:border-gray-700 rounded text-xs cursor-pointer hover:border-primary-500 transition-colors shadow-sm"
                 >
-                  <p className="font-medium truncate">{event.title}</p>
-                  <p className="text-gray-600 dark:text-gray-400">{event.time}</p>
+                  <p className="font-medium truncate text-gray-900 dark:text-gray-100">{event.title}</p>
+                  <p className="text-gray-500 dark:text-gray-400">{event.time}</p>
                 </div>
               ))}
+              {remainingEvents > 0 && (
+                <div
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onDateChange && onDateChange(day);
+                    onViewChange && onViewChange('day');
+                  }}
+                  className="text-xs text-blue-600 dark:text-blue-400 hover:text-blue-800 dark:hover:text-blue-300 cursor-pointer font-medium p-1"
+                >
+                  +{remainingEvents} more
+                </div>
+              )}
             </div>
           </div>
         );
@@ -342,12 +391,15 @@ const WeekView = ({ days, events, onMeetingClick }) => {
 
 const MonthView = ({ days, events, onMeetingClick }) => {
   const weekDays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-  
+
   const getEventsForDate = (date) => {
-    const dateStr = date.toISOString().split('T')[0];
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    const dateStr = `${year}-${month}-${day}`;
     return (events || []).filter(event => event.date === dateStr);
   };
-  
+
   return (
     <div>
       <div className="grid grid-cols-7 gap-1 mb-2">
@@ -360,19 +412,23 @@ const MonthView = ({ days, events, onMeetingClick }) => {
       <div className="grid grid-cols-7 gap-1">
         {days.map((dayObj, index) => {
           const dayEvents = getEventsForDate(dayObj.date);
+          const isToday = dayObj.date.toDateString() === new Date().toDateString();
+
           return (
             <div
               key={index}
-              className={`border border-gray-200 dark:border-gray-800 rounded-lg p-2 min-h-[100px] ${
-                !dayObj.isCurrentMonth ? 'opacity-50' : ''
-              }`}
+              className={`border rounded-lg p-2 min-h-[100px] ${!dayObj.isCurrentMonth ? 'opacity-50' : ''
+                } ${isToday
+                  ? 'bg-blue-50/50 dark:bg-blue-900/10 border-blue-500 dark:border-blue-400 shadow-sm'
+                  : 'border-gray-200 dark:border-gray-800'
+                }`}
             >
-              <div className={`text-sm font-medium mb-1 ${
-                dayObj.date.toDateString() === new Date().toDateString()
-                  ? 'text-primary-600 dark:text-primary-400 font-bold'
-                  : 'text-gray-900 dark:text-gray-100'
-              }`}>
-                {dayObj.date.getDate()}
+              <div className={`text-sm font-medium mb-1 flex justify-between items-center ${isToday
+                ? 'text-blue-700 dark:text-blue-300 font-bold'
+                : 'text-gray-900 dark:text-gray-100'
+                }`}>
+                <span>{dayObj.date.getDate()}</span>
+                {isToday && <span className="text-[10px] uppercase font-bold text-blue-600 dark:text-blue-400">Today</span>}
               </div>
               <div className="space-y-1">
                 {dayEvents.slice(0, 3).map((event) => (
@@ -394,6 +450,63 @@ const MonthView = ({ days, events, onMeetingClick }) => {
             </div>
           );
         })}
+      </div>
+    </div>
+  );
+};
+
+const DayView = ({ date, events, onMeetingClick }) => {
+  const dateStr = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+  const dayEvents = (events || []).filter(event => event.date === dateStr);
+
+  const isToday = date.toDateString() === new Date().toDateString();
+
+  return (
+    <div className="flex flex-col h-full border rounded-lg border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 overflow-hidden">
+      <div className={`p-4 text-center border-b border-gray-200 dark:border-gray-800 ${isToday ? 'bg-blue-50/50 dark:bg-blue-900/10' : ''
+        }`}>
+        <h2 className={`text-2xl font-bold ${isToday ? 'text-blue-700 dark:text-blue-400' : 'text-gray-900 dark:text-gray-100'}`}>
+          {date.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}
+        </h2>
+        {isToday && <span className="text-sm font-medium text-blue-600 dark:text-blue-400">Today</span>}
+      </div>
+
+      <div className="flex-1 overflow-y-auto p-4 space-y-3">
+        {dayEvents.length === 0 ? (
+          <div className="text-center text-gray-500 dark:text-gray-400 py-10">
+            No meetings scheduled for this day
+          </div>
+        ) : (
+          dayEvents.map((event) => (
+            <div
+              key={event.id}
+              onClick={() => onMeetingClick && onMeetingClick(event)}
+              className="flex items-start p-4 rounded-lg border border-gray-100 dark:border-gray-800 bg-gray-50 dark:bg-gray-800/50 hover:border-primary-500 hover:shadow-md transition-all cursor-pointer"
+            >
+              <div className="w-24 text-sm font-semibold text-gray-500 dark:text-gray-400 shrink-0">
+                {event.time}
+              </div>
+              <div>
+                <h3 className="font-semibold text-gray-900 dark:text-gray-100 text-lg mb-1">{event.title}</h3>
+                <div className="flex items-center text-sm text-gray-600 dark:text-gray-400 space-x-3">
+                  {event.duration && <span>{event.duration}</span>}
+                  {event.location && (
+                    <span className="flex items-center">
+                      <span className="w-1 h-1 bg-gray-400 rounded-full mr-2"></span>
+                      {event.location}
+                    </span>
+                  )}
+                </div>
+                {event.description && <p className="text-sm text-gray-500 mt-2 line-clamp-2">{event.description}</p>}
+                {event.attendees && event.attendees.length > 0 && (
+                  <div className="mt-2 text-xs text-gray-400">
+                    {event.attendees.length} attendees
+                  </div>
+                )}
+              </div>
+            </div>
+          ))
+        )}
       </div>
     </div>
   );

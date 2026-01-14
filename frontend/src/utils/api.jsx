@@ -140,7 +140,7 @@ export const meetingAPI = {
     apiClient.get('/api/meetings/calendar/month', { params: month ? { month } : {} }),
 
   // Get events by date range
-  getEventsByDateRange: (startDate, endDate, maxResults = 100) =>
+  getEventsByRange: (startDate, endDate, maxResults = 100) =>
     apiClient.get('/api/meetings/range/events', {
       params: { start_date: startDate, end_date: endDate, max_results: maxResults }
     }),

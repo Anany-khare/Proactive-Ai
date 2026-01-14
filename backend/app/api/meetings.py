@@ -242,23 +242,36 @@ async def get_weekly_events(
     try:
         # Parse week_start or use current week
         if week_start:
+            # Handle potential Z suffix if passed from frontend
+            week_start = week_start.replace('Z', '+00:00')
             start_date = datetime.fromisoformat(week_start)
         else:
             # Start of current week (Monday)
             today = datetime.now()
             start_date = today - timedelta(days=today.weekday())
+            # Set to beginning of day
+            start_date = start_date.replace(hour=0, minute=0, second=0, microsecond=0)
         
         end_date = start_date + timedelta(days=7)
         
-        # Format for Google Calendar API (ISO 8601)
-        start_iso = start_date.isoformat() + 'Z'
-        end_iso = end_date.isoformat() + 'Z'
+        # Format for Google Calendar API (RFC3339) using 'Z' for UTC
+        # Ensure we are passing UTC-like string if naive
+        start_iso = start_date.isoformat()
+        if not start_iso.endswith('Z') and '+' not in start_iso:
+             start_iso += 'Z'
+             
+        end_iso = end_date.isoformat()
+        if not end_iso.endswith('Z') and '+' not in end_iso:
+             end_iso += 'Z'
         
         calendar_service = CalendarService(credentials)
-        events = calendar_service.get_events_by_date_range(start_iso, end_iso, 100)
+        # Increase limit just in case
+        events = calendar_service.get_events_by_date_range(start_iso, end_iso, 250)
         
         return [MeetingResponse(**event) for event in events]
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error fetching weekly events: {str(e)}"

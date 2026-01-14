@@ -103,7 +103,11 @@ def sync_user_data(user_id: int):
             meetings_data = calendar_service.get_upcoming_events(max_results=20)
             
             if meetings_data:
-                for meeting_data in meetings_data:
+                # Deduplicate events by ID to prevent IntegrityError
+                # This handles cases where the same event appears in multiple calendars or API response
+                unique_meetings = {m['id']: m for m in meetings_data}.values()
+                
+                for meeting_data in unique_meetings:
                     meeting_id = meeting_data.get('id')
                     existing_meeting = db.query(Meeting).filter(Meeting.id == meeting_id).first()
                     

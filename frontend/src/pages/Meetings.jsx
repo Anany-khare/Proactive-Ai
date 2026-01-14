@@ -28,7 +28,7 @@ const Meetings = () => {
 
   const handleDeleteMeeting = async () => {
     if (!selectedMeeting) return;
-    
+
     if (!confirm('Are you sure you want to delete this meeting?')) return;
 
     try {
@@ -57,6 +57,13 @@ const Meetings = () => {
         </div>
         <div className="flex items-center space-x-2">
           <Button
+            variant={view === 'day' ? 'default' : 'outline'}
+            onClick={() => setView('day')}
+            size="sm"
+          >
+            Day
+          </Button>
+          <Button
             variant={view === 'week' ? 'default' : 'outline'}
             onClick={() => setView('week')}
             size="sm"
@@ -77,6 +84,7 @@ const Meetings = () => {
         view={view}
         onMeetingClick={handleMeetingClick}
         onCreateMeeting={handleCreateMeeting}
+        onViewChange={setView}
       />
 
       {/* Meeting Detail Dialog */}
@@ -116,23 +124,7 @@ const Meetings = () => {
                   <p className="whitespace-pre-wrap">{selectedMeeting.description}</p>
                 </div>
               )}
-              <div className="flex justify-end space-x-2 pt-4 border-t">
-                <Button
-                  variant="outline"
-                  onClick={handleEditMeeting}
-                >
-                  <Edit className="h-4 w-4 mr-2" />
-                  Edit
-                </Button>
-                <Button
-                  variant="outline"
-                  onClick={handleDeleteMeeting}
-                  className="text-red-600 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-900/20"
-                >
-                  <Trash2 className="h-4 w-4 mr-2" />
-                  Delete
-                </Button>
-              </div>
+              {/* Removed Delete Button as requested */}
             </div>
           )}
         </DialogContent>

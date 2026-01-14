@@ -85,6 +85,7 @@ class MeetingResponse(MeetingBase):
     start_datetime: Optional[str] = None
     end_datetime: Optional[str] = None
     description: Optional[str] = None
+    meet_link: Optional[str] = None
     
     class Config:
         from_attributes = True

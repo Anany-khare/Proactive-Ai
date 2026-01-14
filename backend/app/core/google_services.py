@@ -7,6 +7,19 @@ import base64
 import email
 from email.utils import parsedate_to_datetime
 
+import logging
+import os
+
+# Configure logging to file
+log_file_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'calendar_debug.log')
+logging.basicConfig(
+    filename=log_file_path,
+    level=logging.INFO,
+    format='%(asctime)s - %(message)s',
+    filemode='a'
+)
+logger = logging.getLogger('calendar_debug')
+
 class GmailService:
     def __init__(self, credentials_dict: Dict):
         """Initialize Gmail service with credentials"""
@@ -561,21 +574,58 @@ class CalendarService:
         self.service = build('calendar', 'v3', credentials=creds)
     
     def get_upcoming_events(self, max_results: int = 3) -> List[Dict]:
-        """Fetch upcoming calendar events"""
+        """Fetch upcoming calendar events from ALL calendars"""
         try:
             now = datetime.utcnow().isoformat() + 'Z'
             tomorrow = (datetime.utcnow() + timedelta(days=1)).isoformat() + 'Z'
             
-            events_result = self.service.events().list(
-                calendarId='primary',
-                timeMin=now,
-                timeMax=tomorrow,
-                maxResults=max_results,
-                singleEvents=True,
-                orderBy='startTime'
-            ).execute()
+            # 1. Get list of all calendars
+            calendar_list = self.service.calendarList().list().execute()
+            calendars = calendar_list.get('items', [])
             
-            events = events_result.get('items', [])
+            if not calendars:
+                return []
+                
+            all_events = []
+            
+            # 2. Batch request
+            def callback(request_id, response, exception):
+                if exception:
+                    print(f"Error fetching upcoming events for {request_id}: {exception}")
+                else:
+                    items = response.get('items', [])
+                    all_events.extend(items)
+
+            batch = self.service.new_batch_http_request(callback=callback)
+            
+            for cal in calendars:
+                batch.add(self.service.events().list(
+                    calendarId=cal['id'],
+                    timeMin=now,
+                    timeMax=tomorrow,
+                    maxResults=max_results, # Per calendar
+                    singleEvents=True,
+                    orderBy='startTime'
+                ))
+            
+            batch.execute()
+            
+            # 3. Sort and Limit
+            # We must parse dates to sort correctly
+            def get_start_dt(event):
+                start = event['start'].get('dateTime', event['start'].get('date'))
+                try:
+                    return datetime.fromisoformat(start.replace('Z', '+00:00'))
+                except:
+                    return datetime.min.replace(tzinfo=timezone.utc)
+
+            from datetime import timezone
+            # Sort all events by start time
+            all_events.sort(key=get_start_dt)
+            
+            # Take top N
+            events = all_events[:max_results]
+            
             meetings = []
             
             for event in events:
@@ -646,6 +696,7 @@ class CalendarService:
         attendees = [att.get('email', att.get('displayName', 'Unknown')) 
                    for att in event.get('attendees', [])]
         description = event.get('description', '')
+        meet_link = event.get('hangoutLink')
         
         return {
             'id': event['id'],
@@ -658,6 +709,7 @@ class CalendarService:
             'location': location,
             'attendees': attendees,
             'description': description,
+            'meet_link': meet_link,
             'upcoming': True
         }
     
@@ -749,20 +801,70 @@ class CalendarService:
             return False
     
     def get_events_by_date_range(self, start_date: str, end_date: str, max_results: int = 100) -> List[Dict]:
-        """Get events within a date range (for calendar view)"""
+        """Get events within a date range from ALL user calendars"""
         try:
-            events_result = self.service.events().list(
-                calendarId='primary',
-                timeMin=start_date,
-                timeMax=end_date,
-                maxResults=max_results,
-                singleEvents=True,
-                orderBy='startTime'
-            ).execute()
+            logger.info(f"START: get_events_by_date_range {start_date} to {end_date}")
+            # 1. Get list of all calendars
+            # print("Fetching list of calendars...")
+            calendar_list = self.service.calendarList().list().execute()
+            calendars = calendar_list.get('items', [])
+            logger.info(f"Found {len(calendars)} calendars")
             
-            events = events_result.get('items', [])
-            return [self._format_event(event) for event in events]
+            if not calendars:
+                logger.info("No calendars found.")
+                return []
+                
+            for cal in calendars:
+                logger.info(f"Calendar: {cal.get('summary')} (ID: {cal.get('id')})")
+
+            all_events = []
+            
+            # 2. Prepare batch request
+            def callback(request_id, response, exception):
+                if exception:
+                    logger.error(f"Error fetching events for calendar {request_id}: {exception}")
+                else:
+                    items = response.get('items', [])
+                    logger.info(f"Fetched {len(items)} events from calendar {request_id}")
+                    for item in items:
+                        item['calendar_name'] = request_id 
+                        all_events.append(self._format_event(item))
+
+            batch = self.service.new_batch_http_request(callback=callback)
+            
+            request_count = 0
+            for cal in calendars:
+                cal_id = cal['id']
+                batch.add(self.service.events().list(
+                    calendarId=cal_id,
+                    timeMin=start_date,
+                    timeMax=end_date,
+                    maxResults=max_results,
+                    singleEvents=True,
+                    orderBy='startTime'
+                ), request_id=cal_id)
+                request_count += 1
+            
+            if request_count > 0:
+                logger.info(f"Executing batch request for {request_count} calendars...")
+                batch.execute()
+            
+            def get_sort_key(e):
+                return e.get('start_datetime') or e.get('date') or ''
+                
+            all_events.sort(key=get_sort_key)
+            
+            # Deduplicate events by ID
+            unique_events = {e['id']: e for e in all_events}.values()
+            all_events = list(unique_events)
+
+            logger.info(f"Total events merged (after dedupe): {len(all_events)}")
+            for e in all_events:
+                logger.info(f"Event: {e.get('title')} at {e.get('time')} ({e.get('date')})")
+
+            return all_events
+
         except HttpError as error:
+            logger.error(f'Error getting events: {error}')
             print(f'Error getting events: {error}')
             return []
-
