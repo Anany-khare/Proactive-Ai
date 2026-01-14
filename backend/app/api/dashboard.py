@@ -177,8 +177,12 @@ async def get_contextual_data(
     print(f"[{time.time() - start_time:.3f}s] Cache miss, fetching from DB...")
     
     # 2. Fetch from DB (Fast!)
-    # Emails
-    db_emails = db.query(Email).filter(Email.user_id == current_user.id).order_by(Email.received_at.desc()).limit(10).all()
+    # 2. Fetch from DB (Fast!)
+    # Emails - Only show UNREAD emails for the dashboard
+    db_emails = db.query(Email).filter(
+        Email.user_id == current_user.id,
+        Email.is_read == False
+    ).order_by(Email.received_at.desc()).limit(10).all()
     emails_response = [EmailResponse(
         id=e.id,
         from_email=e.sender,

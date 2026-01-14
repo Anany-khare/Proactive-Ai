@@ -105,7 +105,14 @@ const Dashboard = () => {
               {emails.slice(0, 5).map((email) => (
                 <div
                   key={email.id}
-                  className="p-3 rounded-lg border border-gray-200 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors"
+                  className="p-3 rounded-lg border border-gray-200 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors cursor-pointer"
+                  onClick={() => {
+                    if (email.thread_id) {
+                      window.location.href = `/emails?thread=${email.thread_id}`;
+                    } else {
+                      window.location.href = `/emails/${email.id}`;
+                    }
+                  }}
                 >
                   <div className="flex items-start justify-between mb-1">
                     <div className="flex items-center space-x-2 flex-1 min-w-0">
@@ -124,14 +131,7 @@ const Dashboard = () => {
                     </span>
                   </div>
                   <p
-                    className="text-sm font-medium text-gray-800 dark:text-gray-200 mb-1 cursor-pointer hover:text-primary-600 dark:hover:text-primary-400"
-                    onClick={() => {
-                      if (email.thread_id) {
-                        window.location.href = `/emails?thread=${email.thread_id}`;
-                      } else {
-                        window.location.href = `/emails/${email.id}`;
-                      }
-                    }}
+                    className="text-sm font-medium text-gray-800 dark:text-gray-200 mb-1 group-hover:text-primary-600 dark:group-hover:text-primary-400"
                   >
                     {email.subject}
                   </p>
@@ -247,10 +247,10 @@ const Dashboard = () => {
                     </p>
                     <div className="flex items-center space-x-2 mt-1">
                       <span className={`text-xs px-2 py-0.5 rounded-full ${todo.priority === 'high'
-                          ? 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400'
-                          : todo.priority === 'medium'
-                            ? 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400'
-                            : 'bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-400'
+                        ? 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400'
+                        : todo.priority === 'medium'
+                          ? 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400'
+                          : 'bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-400'
                         }`}>
                         {todo.priority}
                       </span>
@@ -294,8 +294,8 @@ const Dashboard = () => {
                 <div
                   key={notification.id}
                   className={`p-3 rounded-lg border ${!notification.read
-                      ? 'border-primary-200 bg-primary-50 dark:border-primary-800 dark:bg-primary-900/20'
-                      : 'border-gray-200 dark:border-gray-800'
+                    ? 'border-primary-200 bg-primary-50 dark:border-primary-800 dark:bg-primary-900/20'
+                    : 'border-gray-200 dark:border-gray-800'
                     } hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors`}
                 >
                   <div className="flex items-start justify-between">

@@ -63,6 +63,13 @@ async def get_email(
         # Trigger background update to Gmail
         if background_tasks:
              background_tasks.add_task(mark_gmail_read_bg, current_user.id, message_id)
+        
+        # Invalidate dashboard cache
+        from app.core.cache import cache
+        try:
+             cache.delete(f"dashboard:summary:{current_user.id}")
+        except Exception:
+             pass
 
     if cached_email and cached_email.body:
         return EmailDetailResponse(
@@ -116,6 +123,13 @@ async def get_email(
                 # Trigger background sync to Gmail
                 if background_tasks:
                      background_tasks.add_task(mark_gmail_read_bg, current_user.id, message_id)
+
+            # Invalidate dashboard cache
+            try:
+                 from app.core.cache import cache
+                 cache.delete(f"dashboard:summary:{current_user.id}")
+            except Exception:
+                 pass
         else:
             # Create new Email object if not found in DB
             from app.core.models import Email
@@ -137,6 +151,13 @@ async def get_email(
             # Since we just created it as read, we should also ensure Gmail is updated
             if background_tasks:
                  background_tasks.add_task(mark_gmail_read_bg, current_user.id, message_id)
+
+            # Invalidate dashboard cache
+            try:
+                 from app.core.cache import cache
+                 cache.delete(f"dashboard:summary:{current_user.id}")
+            except Exception:
+                 pass
 
         return EmailDetailResponse(**email_data)
         return EmailDetailResponse(**email_data)
@@ -313,6 +334,9 @@ async def get_email_thread(
         # Mark all messages in thread as read in local DB and sync to Gmail
         from app.core.models import Email
         from app.core.google_services import parsedate_to_datetime
+        from app.core.cache import cache
+        
+        updated_read_status = False
         
         try:
             for msg in messages:
@@ -321,6 +345,7 @@ async def get_email_thread(
                 if db_email:
                     if not db_email.is_read:
                         db_email.is_read = True
+                        updated_read_status = True
                         if background_tasks: # Trigger background sync for each unread
                              background_tasks.add_task(mark_gmail_read_bg, current_user.id, msg['id'])
                 else:
@@ -338,10 +363,17 @@ async def get_email_thread(
                         priority='medium'
                     )
                     db.add(new_email)
+                    updated_read_status = True
                     if background_tasks:
                          background_tasks.add_task(mark_gmail_read_bg, current_user.id, msg['id'])
             
             db.commit()
+            if updated_read_status:
+                 # Invalidate dashboard cache
+                 try:
+                      cache.delete(f"dashboard:summary:{current_user.id}")
+                 except Exception:
+                      pass
         except Exception as e:
             print(f"Error updating thread read status: {e}")
             # Don't fail the request, just log
