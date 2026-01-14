@@ -59,22 +59,29 @@ class GmailService:
                 else:
                     email_details[request_id] = response
 
-            batch = self.service.new_batch_http_request(callback=callback)
+            # Process in chunks of 10 to respect rate limits
+            BATCH_SIZE = 10
+            for i in range(0, len(messages), BATCH_SIZE):
+                batch_messages = messages[i:i + BATCH_SIZE]
+                batch = self.service.new_batch_http_request(callback=callback)
+                
+                for msg in batch_messages:
+                    batch.add(self.service.users().messages().get(
+                        userId='me',
+                        id=msg['id'],
+                        format='metadata',
+                        metadataHeaders=['From', 'Subject', 'Date', 'LabelIds']
+                    ), request_id=msg['id'])
+                
+                try:
+                    batch.execute() # Blocks until chunk is done
+                except Exception as e:
+                    print(f"Batch execution failed for chunk {i}: {e}")
+                    # Continue to next chunk or partial success
             
-            for msg in messages:
-                batch.add(self.service.users().messages().get(
-                    userId='me',
-                    id=msg['id'],
-                    format='metadata',
-                    metadataHeaders=['From', 'Subject', 'Date', 'LabelIds']
-                ), request_id=msg['id'])
-            
-            try:
-                batch.execute()
-            except Exception as e:
-                print(f"Batch execution failed: {e}")
-                # Fallback to serial execution if batch fails
-                return self._get_emails_serial(messages)
+            # Check if any failed or fell back (we skip full fallback for now as partial is better than none)
+            if not email_details and messages:
+                 print("Warning: No emails details fetched from batches")
             
             # Process results
             for msg in messages:
@@ -126,17 +133,24 @@ class GmailService:
                 else:
                     email_details[request_id] = response
 
-            batch = self.service.new_batch_http_request(callback=callback)
+            # Process in chunks of 10
+            BATCH_SIZE = 10
+            for i in range(0, len(messages), BATCH_SIZE):
+                batch_messages = messages[i:i + BATCH_SIZE]
+                batch = self.service.new_batch_http_request(callback=callback)
             
-            for msg in messages:
-                batch.add(self.service.users().messages().get(
-                    userId='me',
-                    id=msg['id'],
-                    format='metadata',
-                    metadataHeaders=['From', 'Subject', 'Date', 'LabelIds']
-                ), request_id=msg['id'])
-            
-            batch.execute()
+                for msg in batch_messages:
+                    batch.add(self.service.users().messages().get(
+                        userId='me',
+                        id=msg['id'],
+                        format='metadata',
+                        metadataHeaders=['From', 'Subject', 'Date', 'LabelIds']
+                    ), request_id=msg['id'])
+                
+                try:
+                    batch.execute()
+                except Exception as e:
+                    print(f"Batch execution failed for chunk {i}: {e}")
             
             # Process results
             for msg in messages:
@@ -260,7 +274,7 @@ class GmailService:
             return {
                 'id': message_id,
                 'thread_id': thread_id,
-                'from': from_email,
+                'from_email': from_email,
                 'to': to_email,
                 'subject': subject,
                 'body': body,
@@ -437,7 +451,8 @@ class GmailService:
                 
                 messages.append({
                     'id': msg['id'],
-                    'from': from_email,
+                    'thread_id': thread_id,
+                    'from_email': from_email,
                     'subject': subject,
                     'body': body,
                     'date': date_str,
@@ -450,25 +465,52 @@ class GmailService:
             print(f'Error getting thread: {error}')
             return []
     
-    def get_all_emails(self, query: str = '', max_results: int = 50) -> List[Dict]:
-        """Get all emails with optional query filter"""
+    def get_all_emails(self, query: str = '', max_results: int = 50, page_token: str = None) -> Dict:
+        """Get all emails with optional query filter and pagination"""
         try:
             results = self.service.users().messages().list(
                 userId='me',
                 q=query,
-                maxResults=max_results
+                maxResults=max_results,
+                pageToken=page_token
             ).execute()
             
             messages = results.get('messages', [])
+            next_page_token = results.get('nextPageToken')
+            
             emails = []
             
+            # Optimization: Use batch request here too if possible, but keep simple for now
+            # Actually, let's use batch for performance since infinite scroll expects speed
+            if not messages:
+                return {'items': [], 'next_page_token': None}
+
+            email_details = {}
+            
+            def callback(request_id, response, exception):
+                if exception:
+                    print(f"Error in batch request: {exception}")
+                else:
+                    email_details[request_id] = response
+
+            batch = self.service.new_batch_http_request(callback=callback)
+            
             for msg in messages:
-                message = self.service.users().messages().get(
+                batch.add(self.service.users().messages().get(
                     userId='me',
                     id=msg['id'],
                     format='metadata',
                     metadataHeaders=['From', 'Subject', 'Date']
-                ).execute()
+                ), request_id=msg['id'])
+            
+            batch.execute()
+
+            for msg in messages:
+                # Retain order from list
+                if msg['id'] not in email_details:
+                    continue
+                
+                message = email_details[msg['id']]
                 
                 headers = message['payload'].get('headers', [])
                 from_email = next((h['value'] for h in headers if h['name'] == 'From'), 'Unknown')
@@ -488,10 +530,10 @@ class GmailService:
                     'time': date_str
                 })
             
-            return emails
+            return {'items': emails, 'next_page_token': next_page_token}
         except HttpError as error:
             print(f'Error getting emails: {error}')
-            return []
+            return {'items': [], 'next_page_token': None}
 
 class CalendarService:
     def __init__(self, credentials_dict: Dict):

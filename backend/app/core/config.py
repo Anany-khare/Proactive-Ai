@@ -1,4 +1,4 @@
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import Optional
 import os
 from dotenv import load_dotenv
@@ -6,7 +6,11 @@ from dotenv import load_dotenv
 load_dotenv()
 
 class Settings(BaseSettings):
-    model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
+    model_config = SettingsConfigDict(
+        env_file=".env", 
+        env_file_encoding="utf-8", 
+        extra="ignore"
+    )
     
     # FastAPI Settings
     SECRET_KEY: str = os.getenv("SECRET_KEY", "your-secret-key-change-in-production")
@@ -28,8 +32,12 @@ class Settings(BaseSettings):
     REDIS_URL: Optional[str] = os.getenv("REDIS_URL", "redis://localhost:6379/0")
     
     # Celery
-    CELERY_BROKER_URL: Optional[str] = os.getenv("CELERY_BROKER_URL", "redis://localhost:6379/0")
-    CELERY_RESULT_BACKEND: Optional[str] = os.getenv("CELERY_RESULT_BACKEND", "redis://localhost:6379/0")
+    CELERY_BROKER_URL: Optional[str] = os.getenv("CELERY_BROKER_URL") or (
+        "filesystem://" if os.name == 'nt' and not os.getenv("REDIS_URL") else "redis://localhost:6379/0"
+    )
+    CELERY_RESULT_BACKEND: Optional[str] = os.getenv("CELERY_RESULT_BACKEND") or (
+        "db+sqlite:///results.sqlite" if os.name == 'nt' and not os.getenv("REDIS_URL") else "redis://localhost:6379/0"
+    )
 
     # Security
     ENCRYPTION_KEY: str = os.getenv("ENCRYPTION_KEY", "")

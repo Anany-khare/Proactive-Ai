@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
-import { Reply, Forward, Trash2, Mail, MailOpen, Loader2 } from 'lucide-react';
-import { emailAPI } from '../utils/api.jsx';
+import { Reply, Forward, Trash2, Mail, MailOpen, Loader2, Sparkles } from 'lucide-react';
+import { emailAPI, aiAPI } from '../utils/api.jsx';
 import { Button } from './ui/button.jsx';
 import { Dialog, DialogTrigger, DialogContent, DialogHeader, DialogTitle } from './ui/dialog.jsx';
 
@@ -12,10 +12,27 @@ const EmailActions = ({ email, onUpdate, onDelete }) => {
   const [replyText, setReplyText] = useState('');
   const [forwardText, setForwardText] = useState('');
   const [forwardEmails, setForwardEmails] = useState('');
+  const [isGenerating, setIsGenerating] = useState(false);
+
+  const handleAiReply = async () => {
+    setIsGenerating(true);
+    try {
+      // Find body if possible, or use subject as context
+      const bodyContext = email.body || email.subject || "";
+      const response = await aiAPI.generateReply(bodyContext);
+      setReplyText(response.data.reply_text);
+      setIsReplying(true); // Open reply dialog
+    } catch (error) {
+      console.error('Error generating AI reply:', error);
+      alert('Failed to generate AI reply');
+    } finally {
+      setIsGenerating(false);
+    }
+  };
 
   const handleReply = async () => {
     if (!replyText.trim()) return;
-    
+
     setIsReplying(true);
     try {
       await emailAPI.replyToEmail(email.id, replyText);
@@ -35,7 +52,7 @@ const EmailActions = ({ email, onUpdate, onDelete }) => {
       alert('Please enter at least one email address');
       return;
     }
-    
+
     setIsForwarding(true);
     try {
       const emails = forwardEmails.split(',').map(e => e.trim()).filter(e => e);
@@ -54,7 +71,7 @@ const EmailActions = ({ email, onUpdate, onDelete }) => {
 
   const handleDelete = async () => {
     if (!confirm('Are you sure you want to delete this email?')) return;
-    
+
     setIsDeleting(true);
     try {
       await emailAPI.deleteEmail(email.id);
@@ -82,6 +99,22 @@ const EmailActions = ({ email, onUpdate, onDelete }) => {
 
   return (
     <div className="flex items-center space-x-2">
+      {/* AI Reply Button */}
+      <Button
+        variant="ghost"
+        size="sm"
+        className="h-8 w-8 p-0 text-purple-600 hover:text-purple-700 hover:bg-purple-50 dark:hover:bg-purple-900/20"
+        title="AI Generation Reply"
+        onClick={handleAiReply}
+        disabled={isGenerating}
+      >
+        {isGenerating ? (
+          <Loader2 className="h-4 w-4 animate-spin" />
+        ) : (
+          <Sparkles className="h-4 w-4" />
+        )}
+      </Button>
+
       {/* Reply Dialog */}
       <Dialog>
         <DialogTrigger asChild>

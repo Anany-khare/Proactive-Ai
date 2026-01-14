@@ -40,14 +40,14 @@ class EmailResponse(BaseModel):
 
 class EmailDetailResponse(BaseModel):
     id: str
-    thread_id: str
+    thread_id: Optional[str] = None
     from_email: str
-    to: str
+    to: Optional[str] = "me"
     subject: str
-    body: str
+    body: Optional[str] = None
     date: str
     unread: bool
-    snippet: str
+    snippet: Optional[str] = ""
 
 class EmailReplyRequest(BaseModel):
     message_id: str
@@ -65,6 +65,10 @@ class EmailMarkReadRequest(BaseModel):
 class EmailThreadResponse(BaseModel):
     thread_id: str
     messages: List[EmailDetailResponse]
+
+class EmailListResponse(BaseModel):
+    items: List[EmailResponse]
+    next_page_token: Optional[str] = None
 
 # Meeting Schemas
 class MeetingBase(BaseModel):

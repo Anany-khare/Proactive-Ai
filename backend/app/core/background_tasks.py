@@ -10,12 +10,9 @@ import json
 from app.core.cache import cache
 from dateutil import parser as date_parser
 
-# Initialize Celery
-celery_app = Celery(
-    'tasks',
-    broker=settings.CELERY_BROKER_URL or 'redis://localhost:6379/0',
-    backend=settings.CELERY_RESULT_BACKEND or 'redis://localhost:6379/0'
-)
+# Celery removed for simplicity in local dev without worker
+# celery_app = Celery(...)
+
 
 
 
@@ -27,7 +24,7 @@ def parse_iso_datetime(dt_str):
     except:
         return None
 
-@celery_app.task
+# @celery_app.task
 def sync_user_data(user_id: int):
     """Background task to sync user data from Google services"""
     db = SessionLocal()
@@ -146,7 +143,7 @@ def sync_user_data(user_id: int):
             # 1. Invalidate Dashboard Cache (Force re-compute on next read)
             try:
                 cache_key = f"dashboard:summary:{user_id}"
-                redis_client.delete(cache_key)
+                cache.delete(cache_key)
             except Exception as e:
                 print(f"Redis cleanup error (safe to ignore): {e}")
             
@@ -157,7 +154,7 @@ def sync_user_data(user_id: int):
                 "timestamp": datetime.now().isoformat()
             }
             # Publish to user's specific channel
-            redis_client.publish(f"updates:{user_id}", json.dumps(update_event))
+            cache.publish(f"updates:{user_id}", json.dumps(update_event))
             print(f"Synced data for user {user_id} and published update event.")
         
     except Exception as e:
@@ -166,7 +163,7 @@ def sync_user_data(user_id: int):
     finally:
         db.close()
 
-@celery_app.task
+# @celery_app.task
 def sync_all_users():
     """Sync data for all users with connected services"""
     db = SessionLocal()
@@ -180,11 +177,6 @@ def sync_all_users():
     finally:
         db.close()
 
-# Schedule periodic tasks (runs every 5 minutes)
-celery_app.conf.beat_schedule = {
-    'sync-all-users': {
-        'task': 'app.core.background_tasks.sync_all_users',
-        'schedule': 300.0,  # 5 minutes
-    },
-}
+# Schedule removed
+
 

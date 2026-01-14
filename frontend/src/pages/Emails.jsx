@@ -1,28 +1,33 @@
 import React, { useState, useEffect } from 'react';
 import { Card, CardHeader, CardTitle, CardContent } from '../components/ui/card.jsx';
+import { useEmails } from '../hooks/useEmails.jsx'; // Import the new hook
 import { emailAPI } from '../utils/api.jsx';
 import EmailDetail from '../components/EmailDetail.jsx';
 import EmailThread from '../components/EmailThread.jsx';
 import EmailActions from '../components/EmailActions.jsx';
 import { Mail, MessageSquare, Loader2, Search } from 'lucide-react';
 import { Button } from '../components/ui/button.jsx';
-import { useSearchParams, useParams } from 'react-router-dom';
+import { useSearchParams, useParams, useLocation } from 'react-router-dom';
+import { useQueryClient } from '@tanstack/react-query'; // Import query client
 
 const Emails = () => {
   const { id } = useParams();
   const [searchParams, setSearchParams] = useSearchParams();
-  const [emails, setEmails] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
+  const location = useLocation();
+
+  // State for view management
+  const queryClient = useQueryClient();
   const [selectedEmailId, setSelectedEmailId] = useState(id || searchParams.get('id') || null);
+  const prevEmailId = React.useRef(selectedEmailId); // Track previous ID for navigation detection
   const [selectedThreadId, setSelectedThreadId] = useState(searchParams.get('thread') || null);
   const [searchQuery, setSearchQuery] = useState('');
   const [view, setView] = useState(id ? 'detail' : selectedThreadId ? 'thread' : 'list');
 
-  useEffect(() => {
-    fetchEmails();
-  }, [searchQuery]);
+  // Use the custom hook for fetching data with caching
+  // We pass searchQuery to the hook so it automatically refetches when query changes
+  const { emails, isLoading, error, refetch, deleteEmail, hasNextPage, fetchNextPage, isFetchingNextPage } = useEmails(searchQuery);
 
+  // Sync URL params with state
   useEffect(() => {
     if (selectedEmailId) {
       setView('detail');
@@ -30,24 +35,63 @@ const Emails = () => {
     } else if (selectedThreadId) {
       setView('thread');
       setSelectedEmailId(null);
+    } else {
+      setView('list');
     }
   }, [selectedEmailId, selectedThreadId]);
 
-  const fetchEmails = async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const response = await emailAPI.getAllEmails(searchQuery, 50);
-      setEmails(response.data || []);
-    } catch (err) {
-      console.error('Error fetching emails:', err);
-      setError('Failed to load emails');
-    } finally {
-      setLoading(false);
+  // Handle URL updates or external navigation
+  useEffect(() => {
+    const paramId = searchParams.get('id');
+    const paramThread = searchParams.get('thread');
+
+    if (paramId && paramId !== selectedEmailId) {
+      setSelectedEmailId(paramId);
+    } else if (!paramId && selectedEmailId && view === 'detail') {
+      // If URL param removed but state has ID, clear it (back button support)
+      setSelectedEmailId(null);
     }
-  };
+
+    if (paramThread && paramThread !== selectedThreadId) {
+      setSelectedThreadId(paramThread);
+    } else if (!paramThread && selectedThreadId && view === 'thread') {
+      setSelectedThreadId(null);
+    }
+  }, [searchParams, selectedEmailId, selectedThreadId, view]);
+
+  // Detect return to list view (from email detail) to refresh data
+  useEffect(() => {
+    // If we were viewing an email (prevEmailId.current was set)
+    // and now we are not (selectedEmailId is null)
+    if (prevEmailId.current && !selectedEmailId) {
+      console.log("Returned to list view, refreshing emails...");
+      queryClient.invalidateQueries({ queryKey: ['emails'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard-contextual'] });
+    }
+    prevEmailId.current = selectedEmailId;
+  }, [selectedEmailId, queryClient]);
+
 
   const handleEmailClick = (emailId, threadId = null) => {
+    // Optimistic Update: Mark email as read immediately in checking cache
+    const queryKey = ['emails', searchQuery, 20];
+    queryClient.setQueryData(queryKey, (oldData) => {
+      if (!oldData) return oldData;
+      return {
+        ...oldData,
+        pages: oldData.pages.map(page => ({
+          ...page,
+          items: page.items.map(item =>
+            item.id === emailId ? { ...item, unread: false } : item
+          )
+        }))
+      };
+    });
+
+    // REMOVED: queryClient.invalidateQueries({ queryKey: ['emails'] }); 
+    // We rely on the optimistic update while viewing the email.
+    // The actual refetch happens in verify/handleBack when the DB update is guaranteed.
+
     if (threadId) {
       setSelectedThreadId(threadId);
       setSearchParams({ thread: threadId });
@@ -62,21 +106,37 @@ const Emails = () => {
     setSelectedThreadId(null);
     setView('list');
     setSearchParams({});
-    fetchEmails();
+
+    // Invalidate queries to ensure read status is updated
+    queryClient.invalidateQueries({ queryKey: ['emails'] });
+    // Also invalidate dashboard summary if needed
+    queryClient.invalidateQueries({ queryKey: ['dashboard-contextual'] });
   };
 
   const handleUpdate = () => {
-    fetchEmails();
+    refetch(); // Use refetch from hook
   };
 
   const handleDelete = (emailId) => {
-    setEmails(emails.filter(e => e.id !== emailId));
+    // Optimistic update is tricky without mutation hook fully integrated for UI,
+    // but the hook provides deleteEmail which invalidates queries.
+    // For now, let's just trigger the delete and let 'onSuccess' reload the list.
+    deleteEmail(emailId);
+
+    // For immediate UI feedback if we wanted, we'd need to manipulate cache directly, 
+    // but invalidation (handled in hook) + refetch is safer for consistency.
+
     if (selectedEmailId === emailId) {
       handleBack();
     }
   };
 
-  if (loading && emails.length === 0) {
+  // Debounced search could be added here, but for now we rely on the state update triggering the hook
+  const handleSearch = () => {
+    refetch();
+  }
+
+  if (isLoading && emails.length === 0) {
     return (
       <div className="flex items-center justify-center h-64">
         <Loader2 className="h-8 w-8 animate-spin text-primary-600" />
@@ -126,7 +186,7 @@ const Emails = () => {
               className="flex-1 px-3 py-2 border border-gray-300 dark:border-gray-700 rounded-md bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-primary-500"
             />
             <Button
-              onClick={fetchEmails}
+              onClick={handleSearch}
               variant="outline"
               size="sm"
             >
@@ -187,7 +247,7 @@ const Emails = () => {
                     <EmailActions
                       email={email}
                       onUpdate={handleUpdate}
-                      onDelete={handleDelete}
+                      onDelete={() => handleDelete(email.id)}
                     />
                     {email.thread_id && (
                       <Button
@@ -204,7 +264,28 @@ const Emails = () => {
                 </div>
               </div>
             ))}
-            {emails.length === 0 && !loading && (
+
+            {/* Load More Button */}
+            {hasNextPage && (
+              <div className="flex justify-center pt-4">
+                <Button
+                  variant="outline"
+                  onClick={() => fetchNextPage()}
+                  disabled={isFetchingNextPage}
+                >
+                  {isFetchingNextPage ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      Loading more...
+                    </>
+                  ) : (
+                    'Load More Emails'
+                  )}
+                </Button>
+              </div>
+            )}
+
+            {emails.length === 0 && !isLoading && (
               <div className="text-center py-8 text-gray-500 dark:text-gray-400">
                 No emails found
               </div>

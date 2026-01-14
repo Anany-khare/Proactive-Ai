@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect } from 'react';
+import { createContext, useContext, useState, useEffect, useRef } from 'react';
 import { authAPI } from '../utils/api.jsx';
 import { useLocation, useNavigate } from 'react-router-dom';
 
@@ -19,49 +19,66 @@ export const AuthProvider = ({ children }) => {
   const location = useLocation();
   const navigate = useNavigate();
 
+  // Ref to track if we are currently fetching user to prevent duplicate calls
+  const fetchingUser = useRef(false);
+
+  // Unified Auth Check
   useEffect(() => {
-    // Check for token in URL (OAuth callback)
-    const urlParams = new URLSearchParams(location.search);
-    const token = urlParams.get('token');
-    
-    if (token) {
-      // Handle OAuth callback
-      authAPI.handleCallback(token);
-      // Fetch user info after storing token
-      authAPI.getCurrentUser()
-        .then(response => {
-          setUser(response.data);
-          setIsAuthenticated(true);
-        })
-        .catch(error => {
-          console.error('Failed to get user info:', error);
-        });
-      // Clear URL params
-      window.history.replaceState({}, document.title, location.pathname);
-    }
-    
-    // Check for existing authentication
-    const checkAuth = async () => {
+    const initAuth = async () => {
+      // Prevent double invocation (Strict Mode or race conditions)
+      if (fetchingUser.current) return;
+      fetchingUser.current = true;
+
       try {
-        const storedToken = localStorage.getItem('auth_token');
-        if (storedToken) {
+        const urlParams = new URLSearchParams(window.location.search);
+        const urlToken = urlParams.get('token');
+        let tokenToVerify = null;
+
+        if (urlToken) {
+          console.log('OAuth token found in URL, processing...');
+          // Store token
+          localStorage.setItem('auth_token', urlToken);
+          tokenToVerify = urlToken;
+          // Clear URL params
+          window.history.replaceState({}, document.title, window.location.pathname);
+        } else {
+          // Check localStorage
+          tokenToVerify = localStorage.getItem('auth_token');
+        }
+
+        if (tokenToVerify) {
           // Verify token by fetching user info
-          const response = await authAPI.getCurrentUser();
-          setUser(response.data);
-          setIsAuthenticated(true);
+          try {
+            const response = await authAPI.getCurrentUser();
+            console.log('User authenticated:', response.data.email);
+            setUser(response.data);
+            setIsAuthenticated(true);
+          } catch (error) {
+            console.error('Failed to verify token:', error);
+            // Only clear if it was an invalid token error, not network error
+            if (error.response && error.response.status === 401) {
+              localStorage.removeItem('auth_token');
+              setUser(null);
+              setIsAuthenticated(false);
+            }
+          }
+        } else {
+          console.log('No token found, user is guest');
+          setIsAuthenticated(false);
+          setUser(null);
         }
       } catch (error) {
-        console.error('Auth check failed:', error);
-        localStorage.removeItem('auth_token');
+        console.error('Auth initialization error:', error);
         setIsAuthenticated(false);
         setUser(null);
       } finally {
         setIsLoading(false);
+        fetchingUser.current = false;
       }
     };
 
-    checkAuth();
-  }, [location]);
+    initAuth();
+  }, []); // Run ONCE on mount
 
   const googleAuth = async () => {
     try {
@@ -70,6 +87,7 @@ export const AuthProvider = ({ children }) => {
       authAPI.googleLogin();
     } catch (error) {
       console.error('Google auth failed:', error);
+      setIsLoading(false);
       return { success: false, error: error.message };
     }
   };
@@ -78,6 +96,8 @@ export const AuthProvider = ({ children }) => {
     setUser(null);
     setIsAuthenticated(false);
     localStorage.removeItem('auth_token');
+    localStorage.removeItem('user_profile');
+    localStorage.removeItem('profile_complete');
     navigate('/login');
   };
 
@@ -85,24 +105,18 @@ export const AuthProvider = ({ children }) => {
     try {
       console.log('completeProfile called with:', profileData);
       setIsLoading(true);
-      
+
       // Get current user if not already loaded
       let currentUser = user;
       if (!currentUser) {
-        console.log('User not loaded, fetching from API...');
         try {
           const response = await authAPI.getCurrentUser();
           currentUser = response.data;
-          console.log('User fetched:', currentUser);
-          setUser(currentUser);
         } catch (error) {
           console.error('Failed to get user:', error);
-          // Continue anyway with empty user
         }
-      } else {
-        console.log('User already loaded:', currentUser);
       }
-      
+
       // For now, just mark profile as complete locally
       // In future, you can add a backend endpoint to save profile data
       const updatedUser = {
@@ -110,17 +124,17 @@ export const AuthProvider = ({ children }) => {
         ...profileData,
         profileComplete: true
       };
-      console.log('Updated user:', updatedUser);
+
       setUser(updatedUser);
       setIsAuthenticated(true);
-      
+
       // Store profile data in localStorage (temporary solution)
       localStorage.setItem('user_profile', JSON.stringify(profileData));
       localStorage.setItem('profile_complete', 'true');
-      
+
       // Force a small delay to ensure state updates
       await new Promise(resolve => setTimeout(resolve, 100));
-      
+
       console.log('Profile setup completed successfully');
       return { success: true };
     } catch (error) {
@@ -128,7 +142,6 @@ export const AuthProvider = ({ children }) => {
       return { success: false, error: error.message || 'Profile setup failed' };
     } finally {
       setIsLoading(false);
-      console.log('completeProfile finished, isLoading set to false');
     }
   };
 

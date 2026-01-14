@@ -9,15 +9,22 @@ export function useContextualData() {
   const { data, isLoading, error, refetch } = useQuery({
     queryKey: ['dashboard-contextual'],
     queryFn: async () => {
-      const response = await dashboardAPI.getContextualData();
-      return {
-        dailyBrief: response.data.dailyBrief,
-        emails: response.data.emails || [],
-        meetings: response.data.meetings || [],
-        todos: response.data.todos || [],
-        notifications: response.data.notifications || [],
-        suggestions: response.data.suggestions || [],
-      };
+      console.log('Fetching dashboard context...');
+      try {
+        const response = await dashboardAPI.getContextualData();
+        console.log('Dashboard context fetched:', response.data);
+        return {
+          dailyBrief: response.data.dailyBrief,
+          emails: response.data.emails || [],
+          meetings: response.data.meetings || [],
+          todos: response.data.todos || [],
+          notifications: response.data.notifications || [],
+          suggestions: response.data.suggestions || [],
+        };
+      } catch (error) {
+        console.error('Error fetching dashboard context:', error);
+        throw error;
+      }
     },
     // Use staleTime from global config (5 minutes) or override here
     staleTime: 5 * 60 * 1000,

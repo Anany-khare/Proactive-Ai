@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query, BackgroundTasks
 from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.core.dependencies import get_current_user
@@ -89,17 +89,82 @@ def generate_suggestions(meetings: List[MeetingResponse], emails: List[EmailResp
     
     return suggestions
 
-@router.get("/contextual-data", response_model=DashboardData, dependencies=[Depends(RateLimiter("dashboard", 60))])
+
+    
+# Helper for Sync Triggering
+def trigger_sync_if_needed(current_user: User, db: Session, background_tasks: BackgroundTasks, force_check: bool = False):
+    """
+    Checks if a sync is needed (empty DB or stale data) and triggers it safely.
+    Returns True if triggered, False otherwise.
+    """
+    should_trigger_sync = False
+    
+    # Check if we have data
+    has_emails = db.query(Email).filter(Email.user_id == current_user.id).first() is not None
+    # We can check meetings too if we want a holistic check, but for get_emails, knowing we have emails is enough.
+    # But sticking to the dashboard logic:
+    has_meetings = db.query(Meeting).filter(Meeting.user_id == current_user.id).first() is not None
+
+    if not has_emails and not has_meetings:
+        should_trigger_sync = True
+    elif force_check:
+        # Check staleness
+        if current_user.last_synced_at:
+             time_since_sync = datetime.now() - current_user.last_synced_at.replace(tzinfo=None)
+             if time_since_sync.total_seconds() > 300: # 5 mins
+                 should_trigger_sync = True
+        else:
+             should_trigger_sync = True
+
+    if should_trigger_sync:
+        sync_lock_key = f"sync:locked:{current_user.id}"
+        
+        if not cache.exists(sync_lock_key):
+            print(f"Triggering background sync for user {current_user.id}...")
+            
+            # Atomic DB Lock
+            try:
+                current_user.last_synced_at = datetime.now()
+                db.commit()
+            except Exception as e:
+                print(f"Failed to acquire sync lock on DB: {e}")
+                db.rollback()
+                return False
+
+            try:
+                # Use FastAPI BackgroundTasks instead of Celery
+                if background_tasks:
+                    background_tasks.add_task(sync_user_data, current_user.id)
+                else:
+                    # Fallback if no bg tasks (shouldn't happen with correct dependency injection)
+                    # Run synchronously to ensure data availability on first load? 
+                    # No, that blocks. Better to just warn.
+                    print("BackgroundTasks not provided, running sync synchronously (might block)")
+                    sync_user_data(current_user.id)
+                    
+                cache.set(sync_lock_key, "1", ex=300)
+                return True
+            except Exception as e:
+                print(f"Background sync trigger failed: {e}")
+                return False
+    return False
+
+@router.get("/contextual-data", response_model=DashboardData, dependencies=[Depends(RateLimiter("summary", 60))])
 async def get_contextual_data(
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    background_tasks: BackgroundTasks = BackgroundTasks()
 ):
     """Get all contextual dashboard data (Cached + DB Read Only)"""
+    import time
+    start_time = time.time()
+    print(f"[{start_time}] Starting get_contextual_data")
     
     # 1. Try Cache
     try:
         cache_key = f"dashboard:summary:{current_user.id}"
-        cached_data = redis_client.get(cache_key)
+        # Use SafeCache wrapper 'cache' instead of 'redis_client'
+        cached_data = cache.get(cache_key)
         
         if cached_data:
             try:
@@ -109,7 +174,7 @@ async def get_contextual_data(
     except Exception as e:
         print(f"Redis cache error: {e}")
     
-    print(f"Cache miss for user {current_user.id}, computing from DB...")
+    print(f"[{time.time() - start_time:.3f}s] Cache miss, fetching from DB...")
     
     # 2. Fetch from DB (Fast!)
     # Emails
@@ -190,53 +255,15 @@ async def get_contextual_data(
     
     # 3. Cache Result (10 mins)
     try:
-        redis_client.setex(cache_key, 600, json.dumps(dashboard_data.dict(), default=str))
+         # Use SafeCache wrapper 'cache' instead of 'redis_client'
+        cache.set(cache_key, json.dumps(dashboard_data.dict(), default=str), ex=600)
     except Exception as e:
         print(f"Redis set error: {e}")
 
-    # 4. Trigger Background Sync (Safe Strategy with Circuit Breaker)
-    # Circuit Breaker Logic:
-    # 1. Redis Lock (Fast, 5 min TTL) - Primary Check
-    # 2. DB last_synced_at (Reliable, 5 min window) - Fallback Check
-    
-    should_trigger_sync = False
-    
-    # If DB is empty, user needs data immediately
-    if not db_emails and not db_meetings:
-        should_trigger_sync = True
-    else:
-        # Check staleness if data exists
-        if current_user.last_synced_at:
-             # If synced more than 5 mins ago
-             time_since_sync = datetime.now() - current_user.last_synced_at.replace(tzinfo=None) # naive comparison for simplicity
-             if time_since_sync.total_seconds() > 300:
-                 should_trigger_sync = True
-        else:
-             # Never synced (but has data? maybe from migration), trigger sync
-             should_trigger_sync = True
-
-    if should_trigger_sync:
-        sync_lock_key = f"sync:locked:{current_user.id}"
-        
-        # Check Redis Lock first (Fastest)
-        if not cache.exists(sync_lock_key):
-            # Double check DB timestamp to prevent loop if Redis flushed
-            # (Already checked above via last_synced_at logic)
-            
-            print(f"Triggering background sync for user {current_user.id}...")
-            try:
-                sync_user_data.delay(current_user.id)
-                
-                # Set Redis Lock for 5 mins
-                cache.set(sync_lock_key, "1", ex=300)
-                
-                # Optimistically update DB last_synced_at to prevent immediate retry 
-                # (Background task will update it again on success, but this prevents rapid-fire triggers if DB is slow)
-                # Actually, better to let background task handle DB update to ensure 'success' meaning.
-                # But to act as a DB-lock, we need to respect the *previous* success time.
-                pass 
-            except Exception as e:
-                print(f"Background sync trigger failed: {e}")
+    # 4. Trigger Background Sync
+    print(f"[{time.time() - start_time:.3f}s] Triggering sync check...")
+    trigger_sync_if_needed(current_user, db, background_tasks, force_check=True)
+    print(f"[{time.time() - start_time:.3f}s] Finished get_contextual_data")
 
     return dashboard_data
 
@@ -244,10 +271,14 @@ async def get_contextual_data(
 async def get_emails(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
+    background_tasks: BackgroundTasks = BackgroundTasks(),
     limit: int = 20,
     offset: int = 0
 ):
     """Get emails from DB"""
+    # Trigger sync if empty
+    trigger_sync_if_needed(current_user, db, background_tasks, force_check=False)
+
     emails = db.query(Email).filter(Email.user_id == current_user.id).order_by(Email.received_at.desc()).offset(offset).limit(limit).all()
     
     return [EmailResponse(
@@ -316,9 +347,11 @@ async def create_todo(
     )
     db.add(todo)
     db.commit()
-    db.refresh(todo)
     # Invalidate dashboard cache
-    redis_client.delete(f"dashboard:summary:{current_user.id}")
+    try:
+        cache.delete(f"dashboard:summary:{current_user.id}")
+    except Exception:
+        pass
     return TodoResponse.model_validate(todo)
 
 @router.patch("/todos/{todo_id}", response_model=TodoResponse)
@@ -347,7 +380,10 @@ async def update_todo(
     db.commit()
     db.refresh(todo)
     # Invalidate dashboard cache
-    redis_client.delete(f"dashboard:summary:{current_user.id}")
+    try:
+        cache.delete(f"dashboard:summary:{current_user.id}")
+    except Exception:
+        pass
     return TodoResponse.model_validate(todo)
 
 @router.get("/notifications", response_model=List[NotificationResponse])

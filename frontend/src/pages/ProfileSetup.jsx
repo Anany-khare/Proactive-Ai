@@ -40,15 +40,31 @@ const ProfileSetup = () => {
     });
   };
 
+  const handleToggleAll = (checked) => {
+    setProfileData({
+      ...profileData,
+      preferences: {
+        ...profileData.preferences,
+        calendarAccess: checked,
+        mailAccess: checked,
+        meetAccess: checked
+      }
+    });
+  };
+
+  const areAllPermissionsGranted = profileData.preferences.calendarAccess &&
+    profileData.preferences.mailAccess &&
+    profileData.preferences.meetAccess;
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
     console.log('Profile setup form submitted', profileData);
-    
+
     try {
       const result = await completeProfile(profileData);
       console.log('Complete profile result:', result);
-      
+
       if (result && result.success) {
         console.log('Navigating to dashboard...');
         // Small delay to ensure state is updated
@@ -190,10 +206,19 @@ const ProfileSetup = () => {
             <h2 className="text-2xl font-semibold text-gray-900 dark:text-white mb-6">
               Grant Access Permissions
             </h2>
-            <p className="text-gray-600 dark:text-gray-400 mb-8">
-              Enable these features to get the most out of Proactive AI. You can change these settings anytime.
-            </p>
-            
+            <div className="flex items-center justify-between mb-8">
+              <p className="text-gray-600 dark:text-gray-400">
+                Enable these features to get the most out of Proactive AI. You can change these settings anytime.
+              </p>
+              <div className="flex items-center space-x-3 bg-primary-50 dark:bg-primary-900/20 px-4 py-2 rounded-lg border border-primary-100 dark:border-primary-800">
+                <span className="text-sm font-medium text-primary-700 dark:text-primary-300">Grant All Permissions</span>
+                <SimpleSwitch
+                  checked={areAllPermissionsGranted}
+                  onCheckedChange={handleToggleAll}
+                />
+              </div>
+            </div>
+
             <div className="space-y-6">
               {accessOptions.map((option) => (
                 <div key={option.key} className="border border-gray-200 dark:border-gray-700 rounded-xl p-6 hover:shadow-md transition-shadow">

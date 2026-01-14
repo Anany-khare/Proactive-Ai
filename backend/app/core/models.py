@@ -34,7 +34,7 @@ class User(Base):
     todos = relationship("Todo", back_populates="user", cascade="all, delete-orphan")
     notifications = relationship("Notification", back_populates="user", cascade="all, delete-orphan")
     dashboard_cache = relationship("DashboardCache", back_populates="user", cascade="all, delete-orphan", uselist=False)
-    push_subscriptions = relationship("PushSubscription", cascade="all, delete-orphan")
+    push_subscriptions = relationship("PushSubscription", back_populates="user", cascade="all, delete-orphan")
     emails = relationship("Email", back_populates="user", cascade="all, delete-orphan")
     meetings = relationship("Meeting", back_populates="user", cascade="all, delete-orphan")
 
@@ -122,7 +122,7 @@ class PushSubscription(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     
     # Relationship
-    user = relationship("User")
+    user = relationship("User", back_populates="push_subscriptions")
 
 class Email(Base):
     __tablename__ = "emails"
@@ -133,6 +133,7 @@ class Email(Base):
     subject = Column(String, nullable=True)
     sender = Column(String, nullable=True)
     preview = Column(Text, nullable=True)
+    body = Column(Text, nullable=True)  # Cache full body
     received_at = Column(DateTime(timezone=True), index=True)
     is_read = Column(Boolean, default=False)
     priority = Column(String, default="medium")  # high, medium, low

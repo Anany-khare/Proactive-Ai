@@ -7,21 +7,21 @@ import { Button } from '../components/ui/button.jsx';
 
 const Dashboard = () => {
   const { dailyBrief, emails, meetings, todos, notifications, suggestions, isLoading, error, refetch } = useContextualData();
-  
+
   // Real-time updates
-  const handleEmailUpdate = (newEmails) => {
+  const handleEmailUpdate = React.useCallback((newEmails) => {
     // Refresh dashboard data when new emails arrive
     if (refetch) {
       refetch();
     }
-  };
+  }, [refetch]);
 
-  const handleMeetingUpdate = (newMeetings) => {
+  const handleMeetingUpdate = React.useCallback((newMeetings) => {
     // Refresh dashboard data when new meetings arrive
     if (refetch) {
       refetch();
     }
-  };
+  }, [refetch]);
 
   const { connected } = useRealtimeUpdates(handleEmailUpdate, handleMeetingUpdate);
 
@@ -107,7 +107,7 @@ const Dashboard = () => {
                   key={email.id}
                   className="p-3 rounded-lg border border-gray-200 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors"
                 >
-                    <div className="flex items-start justify-between mb-1">
+                  <div className="flex items-start justify-between mb-1">
                     <div className="flex items-center space-x-2 flex-1 min-w-0">
                       <span className="font-medium text-sm text-gray-900 dark:text-gray-100 truncate">
                         {email.from_email || 'Unknown'}
@@ -123,7 +123,7 @@ const Dashboard = () => {
                       {email.time}
                     </span>
                   </div>
-                  <p 
+                  <p
                     className="text-sm font-medium text-gray-800 dark:text-gray-200 mb-1 cursor-pointer hover:text-primary-600 dark:hover:text-primary-400"
                     onClick={() => {
                       if (email.thread_id) {
@@ -246,13 +246,12 @@ const Dashboard = () => {
                       {todo.task}
                     </p>
                     <div className="flex items-center space-x-2 mt-1">
-                      <span className={`text-xs px-2 py-0.5 rounded-full ${
-                        todo.priority === 'high'
+                      <span className={`text-xs px-2 py-0.5 rounded-full ${todo.priority === 'high'
                           ? 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400'
                           : todo.priority === 'medium'
-                          ? 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400'
-                          : 'bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-400'
-                      }`}>
+                            ? 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400'
+                            : 'bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-400'
+                        }`}>
                         {todo.priority}
                       </span>
                       <span className="text-xs text-gray-500 dark:text-gray-400">
@@ -294,11 +293,10 @@ const Dashboard = () => {
               {notifications.map((notification) => (
                 <div
                   key={notification.id}
-                  className={`p-3 rounded-lg border ${
-                    !notification.read
+                  className={`p-3 rounded-lg border ${!notification.read
                       ? 'border-primary-200 bg-primary-50 dark:border-primary-800 dark:bg-primary-900/20'
                       : 'border-gray-200 dark:border-gray-800'
-                  } hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors`}
+                    } hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors`}
                 >
                   <div className="flex items-start justify-between">
                     <div className="flex-1">

@@ -11,6 +11,7 @@ from app.core.config import settings
 from datetime import timedelta, datetime, timezone
 import secrets
 import json
+from app.core.background_tasks import sync_user_data
 
 router = APIRouter(prefix="/auth", tags=["authentication"])
 
@@ -137,6 +138,12 @@ async def google_callback(
             db.add(service_token)
         
         db.commit()
+
+        # Trigger background sync (deltas)
+        try:
+            sync_user_data.delay(user.id)
+        except Exception as e:
+            print(f"Failed to trigger sync on login: {e}")
         
         # Create JWT token
         access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
