@@ -1,11 +1,11 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Card, CardHeader, CardTitle, CardContent } from '../components/ui/card.jsx';
 import { useEmails } from '../hooks/useEmails.jsx'; // Import the new hook
 import { emailAPI } from '../utils/api.jsx';
 import EmailDetail from '../components/EmailDetail.jsx';
 import EmailThread from '../components/EmailThread.jsx';
 import EmailActions from '../components/EmailActions.jsx';
-import { Mail, MessageSquare, Loader2, Search } from 'lucide-react';
+import { Mail, MessageSquare, Loader2, Search, Calendar, AlertCircle, Filter } from 'lucide-react';
 import { Button } from '../components/ui/button.jsx';
 import { useSearchParams, useParams, useLocation } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query'; // Import query client
@@ -23,14 +23,27 @@ const Emails = () => {
   const [selectedThreadId, setSelectedThreadId] = useState(searchParams.get('thread') || null);
   const [searchQuery, setSearchQuery] = useState('');
   const [view, setView] = useState(id ? 'detail' : selectedThreadId ? 'thread' : 'list');
+  const [activeFilter, setActiveFilter] = useState('all'); // 'all' | 'meetings' | 'important'
 
   // Use the custom hook for fetching data with caching
   // We pass searchQuery to the hook so it automatically refetches when query changes
   const { emails, isLoading, error, refetch, deleteEmail, hasNextPage, fetchNextPage, isFetchingNextPage } = useEmails(searchQuery);
 
+  // Meeting keyword detection
+  const MEETING_KEYWORDS = /\b(invite|meeting|calendar|agenda|scheduled|rsvp|conference|zoom|teams|google meet)\b/i;
+  const isMeetingEmail = (email) => {
+    const text = `${email.subject || ''} ${email.preview || ''}`;
+    return MEETING_KEYWORDS.test(text);
+  };
+
+  const filteredEmails = useMemo(() => {
+    if (activeFilter === 'meetings') return emails.filter(isMeetingEmail);
+    if (activeFilter === 'important') return emails.filter(e => e.priority === 'high');
+    return emails;
+  }, [emails, activeFilter]);
+
   // Real-time updates integration
   const handleRealtimeEmailUpdate = React.useCallback(() => {
-    console.log("Real-time email update received, refreshing list...");
     queryClient.invalidateQueries({ queryKey: ['emails'] });
     // Also context
     queryClient.invalidateQueries({ queryKey: ['dashboard-contextual'] });
@@ -149,8 +162,13 @@ const Emails = () => {
 
   if (isLoading && emails.length === 0) {
     return (
-      <div className="flex items-center justify-center h-64">
-        <Loader2 className="h-8 w-8 animate-spin text-primary-600" />
+      <div className="space-y-4">
+        <div className="h-8 bg-gray-200 dark:bg-gray-800 rounded w-48 animate-pulse"></div>
+        <div className="space-y-3">
+          {[1, 2, 3, 4, 5].map((i) => (
+            <div key={i} className="h-24 bg-gray-200 dark:border-gray-800 rounded-lg animate-pulse border border-transparent"></div>
+          ))}
+        </div>
       </div>
     );
   }
@@ -207,6 +225,34 @@ const Emails = () => {
         </CardContent>
       </Card>
 
+      {/* Filter Tabs */}
+      <div className="flex items-center space-x-1 bg-gray-100 dark:bg-gray-800 rounded-lg p-1">
+        {[
+          { key: 'all', label: 'All', icon: <Mail className="w-4 h-4" /> },
+          { key: 'meetings', label: 'Meeting Invites', icon: <Calendar className="w-4 h-4" /> },
+          { key: 'important', label: 'Important', icon: <AlertCircle className="w-4 h-4" /> },
+        ].map(tab => (
+          <button
+            key={tab.key}
+            onClick={() => setActiveFilter(tab.key)}
+            className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
+              activeFilter === tab.key
+                ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 shadow-sm'
+                : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200'
+            }`}
+          >
+            {tab.icon}
+            <span>{tab.label}</span>
+            {tab.key === 'meetings' && (
+              <span className="text-xs ml-1 opacity-60">({emails.filter(isMeetingEmail).length})</span>
+            )}
+            {tab.key === 'important' && (
+              <span className="text-xs ml-1 opacity-60">({emails.filter(e => e.priority === 'high').length})</span>
+            )}
+          </button>
+        ))}
+      </div>
+
       {error && (
         <div className="text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 p-4 rounded-lg">
           {error}
@@ -218,12 +264,12 @@ const Emails = () => {
         <CardHeader>
           <CardTitle className="flex items-center space-x-2">
             <Mail className="w-5 h-5" />
-            <span>All Emails ({emails.length})</span>
+            <span>{activeFilter === 'all' ? 'All Emails' : activeFilter === 'meetings' ? 'Meeting Invites' : 'Important Emails'} ({filteredEmails.length})</span>
           </CardTitle>
         </CardHeader>
         <CardContent>
           <div className="space-y-2">
-            {emails.map((email) => (
+            {filteredEmails.map((email) => (
               <div
                 key={email.id}
                 className="p-4 rounded-lg border border-gray-200 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors"

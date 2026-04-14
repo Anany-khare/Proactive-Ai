@@ -42,5 +42,13 @@ class Settings(BaseSettings):
     # Security
     ENCRYPTION_KEY: str = os.getenv("ENCRYPTION_KEY", "")
 
+    # AI Integration
+    GEMINI_API_KEY: Optional[str] = os.getenv("GEMINI_API_KEY", "")
+
+    # Fitbit API (Health Data)
+    FITBIT_CLIENT_ID: str = os.getenv("FITBIT_CLIENT_ID", "")
+    FITBIT_CLIENT_SECRET: str = os.getenv("FITBIT_CLIENT_SECRET", "")
+    FITBIT_REDIRECT_URI: str = os.getenv("FITBIT_REDIRECT_URI", "http://localhost:8000/api/health/callback")
+
 settings = Settings()
 

@@ -35,7 +35,6 @@ export const AuthProvider = ({ children }) => {
         let tokenToVerify = null;
 
         if (urlToken) {
-          console.log('OAuth token found in URL, processing...');
           // Store token
           localStorage.setItem('auth_token', urlToken);
           tokenToVerify = urlToken;
@@ -47,23 +46,32 @@ export const AuthProvider = ({ children }) => {
         }
 
         if (tokenToVerify) {
-          // Verify token by fetching user info
+          // Fast-path: Immediately unblock UI if we have cached user data
+          const cachedUser = localStorage.getItem('user_cache');
+          if (cachedUser) {
+            try {
+              setUser(JSON.parse(cachedUser));
+              setIsAuthenticated(true);
+              setIsLoading(false); // Render app immediately
+            } catch (e) {}
+          }
+
+          // Background verification
           try {
             const response = await authAPI.getCurrentUser();
-            console.log('User authenticated:', response.data.email);
             setUser(response.data);
             setIsAuthenticated(true);
+            localStorage.setItem('user_cache', JSON.stringify(response.data));
           } catch (error) {
-            console.error('Failed to verify token:', error);
             // Only clear if it was an invalid token error, not network error
             if (error.response && error.response.status === 401) {
               localStorage.removeItem('auth_token');
+              localStorage.removeItem('user_cache');
               setUser(null);
               setIsAuthenticated(false);
             }
           }
         } else {
-          console.log('No token found, user is guest');
           setIsAuthenticated(false);
           setUser(null);
         }
@@ -98,12 +106,12 @@ export const AuthProvider = ({ children }) => {
     localStorage.removeItem('auth_token');
     localStorage.removeItem('user_profile');
     localStorage.removeItem('profile_complete');
+    localStorage.removeItem('user_cache');
     navigate('/login');
   };
 
   const completeProfile = async (profileData) => {
     try {
-      console.log('completeProfile called with:', profileData);
       setIsLoading(true);
 
       // Get current user if not already loaded
@@ -132,10 +140,8 @@ export const AuthProvider = ({ children }) => {
       localStorage.setItem('user_profile', JSON.stringify(profileData));
       localStorage.setItem('profile_complete', 'true');
 
-      // Force a small delay to ensure state updates
       await new Promise(resolve => setTimeout(resolve, 100));
 
-      console.log('Profile setup completed successfully');
       return { success: true };
     } catch (error) {
       console.error('Profile setup failed:', error);

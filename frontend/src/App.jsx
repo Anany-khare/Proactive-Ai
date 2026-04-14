@@ -14,6 +14,7 @@ const Signup = lazy(() => import('./pages/Signup.jsx'))
 const ProfileSetup = lazy(() => import('./pages/ProfileSetup.jsx'))
 const Emails = lazy(() => import('./pages/Emails.jsx'))
 const Meetings = lazy(() => import('./pages/Meetings.jsx'))
+const Health = lazy(() => import('./pages/Health.jsx'))
 
 function AppContent() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(true);
@@ -134,6 +135,11 @@ function AppContent() {
               <Route path="/meetings" element={
                 <ProtectedRoute>
                   <Meetings />
+                </ProtectedRoute>
+              } />
+              <Route path="/health" element={
+                <ProtectedRoute>
+                  <Health />
                 </ProtectedRoute>
               } />
               <Route path="/" element={<Navigate to="/dashboard" replace />} />

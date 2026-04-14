@@ -1,6 +1,6 @@
 import { NavLink } from 'react-router-dom';
 import { navItems } from '../routes.jsx';
-import { Home, MessageCircle, User, Mail, Calendar } from 'lucide-react';
+import { Home, MessageCircle, User, Mail, Calendar, Heart } from 'lucide-react';
 import { useState } from 'react';
 
 const Sidebar = ({ isCollapsed, onToggle }) => {
@@ -33,6 +33,7 @@ const Sidebar = ({ isCollapsed, onToggle }) => {
                   {item.icon === 'home' && <Home size={20} />}
                   {item.icon === 'mail' && <Mail size={20} />}
                   {item.icon === 'calendar' && <Calendar size={20} />}
+                  {item.icon === 'heart' && <Heart size={20} />}
                   {item.icon === 'message-circle' && <MessageCircle size={20} />}
                   {item.icon === 'settings' && <User size={20} />}
                 </span>

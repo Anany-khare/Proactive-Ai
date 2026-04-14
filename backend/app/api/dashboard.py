@@ -53,19 +53,17 @@ def get_time_of_day() -> str:
     else:
         return "evening"
 
+def is_all_day_event(m: Meeting) -> bool:
+    """Check if a meeting is an all-day event (like a festival or holiday)."""
+    if not m.start_time or not m.end_time:
+        return True
+    st = m.start_time.replace(tzinfo=None) if m.start_time.tzinfo else m.start_time
+    et = m.end_time.replace(tzinfo=None) if m.end_time.tzinfo else m.end_time
+    return st.hour == 0 and st.minute == 0 and et.hour == 0 and et.minute == 0
+
 def generate_suggestions(meetings: List[MeetingResponse], emails: List[EmailResponse], todos: List[TodoResponse]) -> List[Suggestion]:
-    """Generate AI-powered suggestions"""
+    """Generate AI-powered suggestions — only actionable items with real navigation targets."""
     suggestions = []
-    
-    # Meeting suggestions
-    if meetings:
-        meeting = meetings[0]
-        suggestions.append(Suggestion(
-            id=len(suggestions) + 1,
-            type="preparation",
-            message=f"Review materials for {meeting.title} at {meeting.time}",
-            action="Prepare"
-        ))
     
     # Email suggestions
     high_priority_emails = [e for e in emails if e.priority == "high" and e.unread]
@@ -85,6 +83,15 @@ def generate_suggestions(meetings: List[MeetingResponse], emails: List[EmailResp
             type="reminder",
             message=f"You have {len(urgent_todos)} urgent task{'s' if len(urgent_todos) != 1 else ''} to complete",
             action="View Tasks"
+        ))
+
+    # Meeting conflict suggestion
+    if len(meetings) >= 2:
+        suggestions.append(Suggestion(
+            id=len(suggestions) + 1,
+            type="action",
+            message=f"You have {len(meetings)} upcoming meeting{'s' if len(meetings) != 1 else ''}. Check your calendar for conflicts.",
+            action="View Meetings"
         ))
     
     return suggestions
@@ -197,10 +204,13 @@ async def get_contextual_data(
 
     # Meetings
     now = datetime.now()
-    db_meetings = db.query(Meeting).filter(
+    all_db_meetings = db.query(Meeting).filter(
         Meeting.user_id == current_user.id,
         Meeting.start_time >= now
-    ).order_by(Meeting.start_time.asc()).limit(5).all()
+    ).order_by(Meeting.start_time.asc()).limit(20).all()
+    
+    # Filter out all-day events (festivals) and take the top 5
+    db_meetings = [m for m in all_db_meetings if not is_all_day_event(m)][:5]
     
     meetings_response = [MeetingResponse(
         id=m.id,
@@ -211,8 +221,8 @@ async def get_contextual_data(
         attendees=json.loads(m.attendees) if m.attendees else [],
         upcoming=True,
         date=m.start_time.isoformat() if m.start_time else None,
-        start_datetime = m.start_time,
-        end_datetime = m.end_time,
+        start_datetime = m.start_time.isoformat() if m.start_time else None,
+        end_datetime = m.end_time.isoformat() if m.end_time else None,
         description=m.description
     ) for m in db_meetings]
     
@@ -248,6 +258,10 @@ async def get_contextual_data(
     # Suggestions
     suggestions = generate_suggestions(meetings_response, emails_response, todos_response)
     
+    # Health data
+    from app.services.health_service import get_latest_health_data
+    health_data = get_latest_health_data(current_user.id, db)
+    
     dashboard_data = DashboardData(
         dailyBrief=daily_brief,
         emails=emails_response,
@@ -269,7 +283,10 @@ async def get_contextual_data(
     trigger_sync_if_needed(current_user, db, background_tasks, force_check=True)
     print(f"[{time.time() - start_time:.3f}s] Finished get_contextual_data")
 
-    return dashboard_data
+    # Return with health data appended
+    response = dashboard_data.dict()
+    response["health"] = health_data
+    return response
 
 @router.get("/emails", response_model=List[EmailResponse], dependencies=[Depends(RateLimiter("emails", 100))])
 async def get_emails(
@@ -304,10 +321,12 @@ async def get_meetings(
 ):
     """Get meetings from DB"""
     now = datetime.now()
-    meetings = db.query(Meeting).filter(
+    all_meetings = db.query(Meeting).filter(
         Meeting.user_id == current_user.id,
         Meeting.start_time >= now
-    ).order_by(Meeting.start_time.asc()).limit(20).all()
+    ).order_by(Meeting.start_time.asc()).limit(50).all()
+    
+    meetings = [m for m in all_meetings if not is_all_day_event(m)][:20]
     
     return [MeetingResponse(
         id=m.id,
@@ -318,8 +337,8 @@ async def get_meetings(
         attendees=json.loads(m.attendees) if m.attendees else [],
         upcoming=True,
         date=m.start_time.isoformat() if m.start_time else None,
-        start_datetime = m.start_time,
-        end_datetime = m.end_time,
+        start_datetime = m.start_time.isoformat() if m.start_time else None,
+        end_datetime = m.end_time.isoformat() if m.end_time else None,
         description=m.description
     ) for m in meetings]
 

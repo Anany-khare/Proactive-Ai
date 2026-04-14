@@ -19,7 +19,10 @@ SCOPES = [
     'https://www.googleapis.com/auth/calendar.readonly',
     'https://www.googleapis.com/auth/calendar',  # For meeting CRUD operations
     'https://www.googleapis.com/auth/userinfo.email',
-    'https://www.googleapis.com/auth/userinfo.profile'
+    'https://www.googleapis.com/auth/userinfo.profile',
+    'https://www.googleapis.com/auth/fitness.activity.read',  # For step count, calories
+    'https://www.googleapis.com/auth/fitness.sleep.read',     # For sleep data
+    'https://www.googleapis.com/auth/fitness.heart_rate.read', # For heart rate
 ]
 
 def get_google_flow():

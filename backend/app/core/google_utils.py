@@ -84,7 +84,10 @@ def get_google_credentials(user: User, db: Session) -> dict:
                 'https://www.googleapis.com/auth/calendar.readonly',
                 'https://www.googleapis.com/auth/calendar',
                 'https://www.googleapis.com/auth/userinfo.email',
-                'https://www.googleapis.com/auth/userinfo.profile'
+                'https://www.googleapis.com/auth/userinfo.profile',
+                'https://www.googleapis.com/auth/fitness.activity.read',
+                'https://www.googleapis.com/auth/fitness.sleep.read',
+                'https://www.googleapis.com/auth/fitness.heart_rate.read',
             ]
         }
         

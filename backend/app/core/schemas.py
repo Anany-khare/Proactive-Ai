@@ -164,3 +164,37 @@ class DashboardData(BaseModel):
     notifications: List[NotificationResponse] = []
     suggestions: List[Suggestion] = []
 
+# Health Schemas
+class HealthDataResponse(BaseModel):
+    date: str
+    sleep_minutes: Optional[int] = None
+    sleep_score: Optional[int] = None
+    steps: Optional[int] = 0
+    resting_heart_rate: Optional[int] = None
+    calories_burned: Optional[int] = None
+    active_minutes: Optional[int] = None
+    source: str = "fitbit"
+    # Computed fields for the frontend
+    sleep_hours: Optional[float] = None
+    readiness_score: Optional[int] = None
+    readiness_label: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+# Agentic Action Schemas
+class RescheduleRequest(BaseModel):
+    event_id: str
+    new_start: str  # ISO datetime
+    new_end: str    # ISO datetime
+    reason: Optional[str] = None
+
+class DraftEmailRequest(BaseModel):
+    email_id: str  # The email to reply to
+    tone: Optional[str] = "professional"  # professional, casual, urgent
+
+class ActionResponse(BaseModel):
+    success: bool
+    message: str
+    data: Optional[dict] = None
+

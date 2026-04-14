@@ -186,8 +186,85 @@ export const adminAPI = {
 
 // AI API
 export const aiAPI = {
+  // Chat with AI assistant
+  chat: (message) => apiClient.post('/api/ai/chat', { message }),
+
+  // Chat history
+  getChatHistory: (limit = 50) => apiClient.get(`/api/ai/chat/history?limit=${limit}`),
+  clearChatHistory: () => apiClient.delete('/api/ai/chat/history'),
+
   // Generate reply
   generateReply: (emailBody) => apiClient.post('/api/ai/generate-reply', { email_body: emailBody }),
+
+  // Get proactive dashboard insights (Gemini-powered briefing + conflicts)
+  getInsights: () => apiClient.get('/api/ai/insights'),
+
+  // Detect meeting conflicts
+  getConflicts: () => apiClient.get('/api/ai/conflicts'),
+
+  // Ask Gemini for rescheduling suggestions for conflicts
+  resolveConflicts: () => apiClient.post('/api/ai/conflicts/resolve'),
+
+  // Get Gemini-powered email priority summary
+  getEmailSummary: () => apiClient.get('/api/ai/email-summary'),
+
+  // Auto-reschedule: run the full proactive pipeline
+  autoReschedule: () => apiClient.post('/api/ai/auto-reschedule'),
+
+  // Find free calendar slots
+  getFreeSlots: (duration = 60, days = 7) =>
+    apiClient.get(`/api/ai/free-slots?duration=${duration}&days=${days}`),
+
+  // Smart email reply (calendar-aware)
+  smartReply: (emailId) => apiClient.post('/api/ai/smart-reply', { email_id: emailId }),
+};
+
+// Teams API
+export const teamsAPI = {
+  getTeams: () => apiClient.get('/api/teams/'),
+  createTeam: (data) => apiClient.post('/api/teams/', data),
+  updateTeam: (teamId, data) => apiClient.patch(`/api/teams/${teamId}`, data),
+  deleteTeam: (teamId) => apiClient.delete(`/api/teams/${teamId}`),
+};
+
+// Health API (Fitbit integration)
+export const healthAPI = {
+  // Get connection status
+  getStatus: () => apiClient.get('/api/health/status'),
+
+  // Get Fitbit connect URL
+  getConnectUrl: () => apiClient.get('/api/health/connect'),
+
+  // Get health data for a date
+  getData: (date = null) => apiClient.get('/api/health/data', { params: date ? { date } : {} }),
+
+  // Force sync from Fitbit
+  sync: () => apiClient.post('/api/health/sync'),
+
+  // Manual entry (for testing)
+  manualEntry: (sleepHours, steps, restingHr) =>
+    apiClient.post('/api/health/manual', null, {
+      params: { sleep_hours: sleepHours, steps, resting_hr: restingHr },
+    }),
+};
+
+// Agentic Actions API (1-click operations)
+export const actionsAPI = {
+  // Reschedule a meeting
+  reschedule: (eventId, newStart, newEnd, reason = '') =>
+    apiClient.post('/api/actions/reschedule', {
+      event_id: eventId,
+      new_start: newStart,
+      new_end: newEnd,
+      reason,
+    }),
+
+  // Draft an AI email reply in Gmail
+  draftReply: (emailId, tone = 'professional') =>
+    apiClient.post('/api/actions/draft-email', {
+      email_id: emailId,
+      tone,
+    }),
 };
 
 export default apiClient;

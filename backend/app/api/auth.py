@@ -141,7 +141,12 @@ async def google_callback(
 
         # Trigger background sync (deltas)
         try:
-            sync_user_data.delay(user.id)
+            # Try Celery first, fall back to direct call
+            try:
+                sync_user_data.delay(user.id)
+            except Exception:
+                # Celery not available — run synchronously
+                sync_user_data(user.id)
         except Exception as e:
             print(f"Failed to trigger sync on login: {e}")
         
@@ -232,3 +237,30 @@ async def get_user_profile(
     }
 
 
+from pydantic import BaseModel
+from typing import Optional
+
+class ProfileUpdateRequest(BaseModel):
+    name: Optional[str] = None
+
+
+@router.patch("/profile")
+async def update_user_profile(
+    request: ProfileUpdateRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Update the user's profile. Email is immutable (Google OAuth identifier)."""
+    if request.name is not None:
+        current_user.name = request.name.strip()
+    db.commit()
+    db.refresh(current_user)
+    return {
+        "status": "updated",
+        "user": {
+            "id": current_user.id,
+            "email": current_user.email,
+            "name": current_user.name,
+            "picture": current_user.picture,
+        },
+    }

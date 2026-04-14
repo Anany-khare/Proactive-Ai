@@ -577,7 +577,7 @@ class CalendarService:
         """Fetch upcoming calendar events from ALL calendars"""
         try:
             now = datetime.utcnow().isoformat() + 'Z'
-            tomorrow = (datetime.utcnow() + timedelta(days=1)).isoformat() + 'Z'
+            future_limit = (datetime.utcnow() + timedelta(days=30)).isoformat() + 'Z'
             
             # 1. Get list of all calendars
             calendar_list = self.service.calendarList().list().execute()
@@ -602,7 +602,7 @@ class CalendarService:
                 batch.add(self.service.events().list(
                     calendarId=cal['id'],
                     timeMin=now,
-                    timeMax=tomorrow,
+                    timeMax=future_limit,
                     maxResults=max_results, # Per calendar
                     singleEvents=True,
                     orderBy='startTime'
@@ -611,17 +611,11 @@ class CalendarService:
             batch.execute()
             
             # 3. Sort and Limit
-            # We must parse dates to sort correctly
-            def get_start_dt(event):
-                start = event['start'].get('dateTime', event['start'].get('date'))
-                try:
-                    return datetime.fromisoformat(start.replace('Z', '+00:00'))
-                except:
-                    return datetime.min.replace(tzinfo=timezone.utc)
-
-            from datetime import timezone
+            def get_start_str(event):
+                return event['start'].get('dateTime', event['start'].get('date', ''))
+                
             # Sort all events by start time
-            all_events.sort(key=get_start_dt)
+            all_events.sort(key=get_start_str)
             
             # Take top N
             events = all_events[:max_results]
@@ -629,33 +623,11 @@ class CalendarService:
             meetings = []
             
             for event in events:
-                start = event['start'].get('dateTime', event['start'].get('date'))
-                end = event['end'].get('dateTime', event['end'].get('date'))
-                
-                # Parse times
-                try:
-                    start_dt = datetime.fromisoformat(start.replace('Z', '+00:00'))
-                    end_dt = datetime.fromisoformat(end.replace('Z', '+00:00'))
-                    duration = end_dt - start_dt
-                    duration_str = f"{int(duration.total_seconds() / 60)} min"
-                    time_str = start_dt.strftime('%I:%M %p')
-                except:
-                    time_str = start
-                    duration_str = "Unknown"
-                
-                location = event.get('location', 'Not specified')
-                attendees = [att.get('email', att.get('displayName', 'Unknown')) 
-                           for att in event.get('attendees', [])]
-                
-                meetings.append({
-                    'id': event['id'],
-                    'title': event.get('summary', 'No Title'),
-                    'time': time_str,
-                    'duration': duration_str,
-                    'location': location,
-                    'attendees': attendees[:5],  # Limit to 5 attendees
-                    'upcoming': True
-                })
+                formatted_event = self._format_event(event)
+                if formatted_event:
+                    # Keep backwards compatibility for limit attendees natively just in case
+                    formatted_event['attendees'] = formatted_event['attendees'][:5]
+                    meetings.append(formatted_event)
             
             return meetings
         except HttpError as error:

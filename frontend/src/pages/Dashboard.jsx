@@ -1,26 +1,444 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Card, CardHeader, CardTitle, CardContent } from '../components/ui/card.jsx';
 import { useContextualData } from '../hooks/useContextualData.jsx';
 import { useRealtimeUpdates } from '../hooks/useRealtimeUpdates.jsx';
-import { Mail, Calendar, CheckSquare, Bell, Lightbulb, Clock, User, AlertCircle } from 'lucide-react';
+import { Mail, Calendar, Bell, Lightbulb, Clock, AlertCircle, Brain, Loader2, Users, Plus, Trash2, X, Pencil, Heart, Zap, Send } from 'lucide-react';
 import { Button } from '../components/ui/button.jsx';
+import { aiAPI, teamsAPI, actionsAPI } from '../utils/api.jsx';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useNavigate } from 'react-router-dom';
 
+// ─── Circular Progress Ring ──────────────────────────────────────────────────
+const CircularProgress = ({ value, max, size = 64, strokeWidth = 5, color = '#8b5cf6', label, sublabel }) => {
+  const radius = (size - strokeWidth) / 2;
+  const circumference = 2 * Math.PI * radius;
+  const pct = Math.min(value / max, 1);
+  const offset = circumference * (1 - pct);
+
+  return (
+    <div className="flex flex-col items-center">
+      <svg width={size} height={size} className="transform -rotate-90">
+        <circle cx={size / 2} cy={size / 2} r={radius} fill="none"
+          stroke="currentColor" className="text-gray-200 dark:text-gray-700" strokeWidth={strokeWidth} />
+        <circle cx={size / 2} cy={size / 2} r={radius} fill="none"
+          stroke={color} strokeWidth={strokeWidth} strokeLinecap="round"
+          strokeDasharray={circumference} strokeDashoffset={offset}
+          className="transition-all duration-1000 ease-out" />
+      </svg>
+      <div className="absolute flex flex-col items-center justify-center" style={{ width: size, height: size }}>
+        <span className="text-sm font-bold text-gray-900 dark:text-gray-100">{label}</span>
+        {sublabel && <span className="text-[10px] text-gray-500 dark:text-gray-400">{sublabel}</span>}
+      </div>
+    </div>
+  );
+};
+
+// ─── Health & Readiness Card ─────────────────────────────────────────────────
+const HealthCard = ({ health }) => {
+  const queryClient = useQueryClient();
+  const [showManual, setShowManual] = useState(false);
+  const [manualSleep, setManualSleep] = useState('');
+  const [manualSteps, setManualSteps] = useState('');
+  const [manualHR, setManualHR] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [connecting, setConnecting] = useState(false);
+
+  // Check Fitbit status
+  const { data: fitbitStatus } = useQuery({
+    queryKey: ['fitbit-status'],
+    queryFn: async () => { const res = await healthAPI.getStatus(); return res.data; },
+    staleTime: 60 * 1000,
+    retry: false,
+  });
+
+  const handleConnectFitbit = async () => {
+    setConnecting(true);
+    try {
+      const res = await healthAPI.getConnectUrl();
+      window.open(res.data.auth_url, '_blank');
+    } catch (err) {
+      console.error('Fitbit connect error:', err);
+    } finally {
+      setConnecting(false);
+    }
+  };
+
+  const handleManualSave = async () => {
+    setSaving(true);
+    try {
+      await healthAPI.manualEntry(
+        manualSleep ? parseFloat(manualSleep) : null,
+        manualSteps ? parseInt(manualSteps) : null,
+        manualHR ? parseInt(manualHR) : null
+      );
+      queryClient.invalidateQueries({ queryKey: ['dashboard-contextual'] });
+      setShowManual(false);
+      setManualSleep(''); setManualSteps(''); setManualHR('');
+    } catch (err) {
+      console.error('Manual entry error:', err);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleSync = async () => {
+    try {
+      await healthAPI.sync();
+      queryClient.invalidateQueries({ queryKey: ['dashboard-contextual'] });
+    } catch (err) {
+      console.error('Sync error:', err);
+    }
+  };
+
+  // Readiness color coding
+  const getReadinessColor = (score) => {
+    if (!score) return '#6b7280';
+    if (score >= 80) return '#10b981';
+    if (score >= 60) return '#f59e0b';
+    if (score >= 40) return '#f97316';
+    return '#ef4444';
+  };
+
+  const readinessColor = getReadinessColor(health?.readiness_score);
+
+  return (
+    <Card className="bg-gradient-to-br from-emerald-50 to-teal-100 dark:from-emerald-900/20 dark:to-teal-800/20 border-emerald-200 dark:border-emerald-800">
+      <CardHeader>
+        <CardTitle className="flex items-center justify-between">
+          <div className="flex items-center space-x-2">
+            <Heart className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
+            <span>Health & Readiness</span>
+          </div>
+          <div className="flex items-center space-x-1">
+            {fitbitStatus?.connected && (
+              <Button variant="ghost" size="sm" onClick={handleSync} title="Sync from Fitbit"
+                className="h-7 w-7 p-0 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-200/50 dark:hover:bg-emerald-800/50">
+                <RefreshCw className="w-3.5 h-3.5" />
+              </Button>
+            )}
+            <Button variant="ghost" size="sm" onClick={() => setShowManual(!showManual)}
+              className="h-7 text-xs text-emerald-700 dark:text-emerald-300 hover:bg-emerald-200/50 dark:hover:bg-emerald-800/50">
+              {showManual ? <X className="w-3.5 h-3.5" /> : <Plus className="w-3.5 h-3.5 mr-1" />}
+              {showManual ? '' : 'Log'}
+            </Button>
+          </div>
+        </CardTitle>
+      </CardHeader>
+      <CardContent>
+        {/* Manual entry form */}
+        {showManual && (
+          <div className="mb-4 p-3 rounded-lg border border-emerald-200 dark:border-emerald-700 bg-white/60 dark:bg-gray-800/60 space-y-2">
+            <div className="grid grid-cols-3 gap-2">
+              <div>
+                <label className="text-[10px] text-gray-500 dark:text-gray-400 uppercase tracking-wider">Sleep (hrs)</label>
+                <input type="number" step="0.5" value={manualSleep} onChange={e => setManualSleep(e.target.value)} placeholder="7.5"
+                  className="w-full px-2 py-1.5 text-sm rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100" />
+              </div>
+              <div>
+                <label className="text-[10px] text-gray-500 dark:text-gray-400 uppercase tracking-wider">Steps</label>
+                <input type="number" value={manualSteps} onChange={e => setManualSteps(e.target.value)} placeholder="8000"
+                  className="w-full px-2 py-1.5 text-sm rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100" />
+              </div>
+              <div>
+                <label className="text-[10px] text-gray-500 dark:text-gray-400 uppercase tracking-wider">HR (bpm)</label>
+                <input type="number" value={manualHR} onChange={e => setManualHR(e.target.value)} placeholder="65"
+                  className="w-full px-2 py-1.5 text-sm rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100" />
+              </div>
+            </div>
+            <Button size="sm" onClick={handleManualSave} disabled={saving} className="w-full">
+              {saving ? 'Saving…' : 'Save Health Data'}
+            </Button>
+          </div>
+        )}
+
+        {/* Health data display */}
+        {health ? (
+          <div className="space-y-4">
+            {/* Readiness score + metrics row */}
+            <div className="flex items-center justify-between">
+              {/* Readiness Ring */}
+              <div className="relative flex items-center justify-center">
+                <CircularProgress
+                  value={health.readiness_score || 0} max={100} size={80} strokeWidth={6}
+                  color={readinessColor}
+                  label={health.readiness_score ?? '—'}
+                  sublabel={health.readiness_label || ''}
+                />
+              </div>
+
+              {/* Metric cards */}
+              <div className="flex-1 ml-4 grid grid-cols-3 gap-2">
+                <div className="flex flex-col items-center p-2 rounded-lg bg-white/50 dark:bg-gray-800/50">
+                  <Moon className="w-4 h-4 text-indigo-500 mb-1" />
+                  <span className="text-lg font-bold text-gray-900 dark:text-gray-100">
+                    {health.sleep_hours ?? '—'}
+                  </span>
+                  <span className="text-[10px] text-gray-500 dark:text-gray-400 uppercase">Hours</span>
+                </div>
+                <div className="flex flex-col items-center p-2 rounded-lg bg-white/50 dark:bg-gray-800/50">
+                  <Footprints className="w-4 h-4 text-orange-500 mb-1" />
+                  <span className="text-lg font-bold text-gray-900 dark:text-gray-100">
+                    {health.steps != null ? (health.steps >= 1000 ? `${(health.steps / 1000).toFixed(1)}k` : health.steps) : '—'}
+                  </span>
+                  <span className="text-[10px] text-gray-500 dark:text-gray-400 uppercase">Steps</span>
+                </div>
+                <div className="flex flex-col items-center p-2 rounded-lg bg-white/50 dark:bg-gray-800/50">
+                  <Activity className="w-4 h-4 text-red-500 mb-1" />
+                  <span className="text-lg font-bold text-gray-900 dark:text-gray-100">
+                    {health.resting_heart_rate || '—'}
+                  </span>
+                  <span className="text-[10px] text-gray-500 dark:text-gray-400 uppercase">BPM</span>
+                </div>
+              </div>
+            </div>
+
+            {/* AI readiness insight */}
+            {health.readiness_score != null && health.readiness_score < 60 && (
+              <div className="p-2.5 rounded-lg bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700 text-xs text-amber-800 dark:text-amber-300 flex items-start space-x-2">
+                <Zap className="w-4 h-4 flex-shrink-0 mt-0.5" />
+                <span>Low readiness detected. The AI will factor this into your scheduling recommendations today.</span>
+              </div>
+            )}
+
+            <p className="text-[10px] text-gray-400 dark:text-gray-500 text-right">
+              Data from {health.date} · {health.source}
+            </p>
+          </div>
+        ) : (
+          <div className="text-center py-4 space-y-3">
+            <p className="text-sm text-gray-500 dark:text-gray-400">No health data yet</p>
+            <div className="flex flex-col items-center space-y-2">
+              <Button size="sm" variant="outline" onClick={handleConnectFitbit} disabled={connecting}
+                className="text-xs border-emerald-300 dark:border-emerald-700 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-900/30">
+                <Link className="w-3.5 h-3.5 mr-1.5" />
+                {connecting ? 'Connecting…' : 'Connect Fitbit'}
+              </Button>
+              <span className="text-[10px] text-gray-400">or use the "Log" button to enter data manually</span>
+            </div>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+};
+
+// ─── Teams Card Component ─────────────────────────────────────────────────────
+const TeamsCard = () => {
+  const queryClient = useQueryClient();
+  const { data: teams = [], isLoading } = useQuery({
+    queryKey: ['teams'],
+    queryFn: async () => { const res = await teamsAPI.getTeams(); return res.data; },
+    staleTime: 5 * 60 * 1000,
+  });
+
+  const [showForm, setShowForm] = useState(false);
+  const [editingTeamId, setEditingTeamId] = useState(null);
+  const [teamName, setTeamName] = useState('');
+  const [members, setMembers] = useState([{ name: '', email: '' }]);
+  const [saving, setSaving] = useState(false);
+
+  const addMemberRow = () => setMembers(prev => [...prev, { name: '', email: '' }]);
+  const removeMemberRow = (idx) => setMembers(prev => prev.filter((_, i) => i !== idx));
+  const updateMember = (idx, field, value) => {
+    setMembers(prev => prev.map((m, i) => i === idx ? { ...m, [field]: value } : m));
+  };
+
+  const handleEdit = (team) => {
+    setEditingTeamId(team.id);
+    setTeamName(team.name);
+    setMembers(team.members?.length ? team.members : [{ name: '', email: '' }]);
+    setShowForm(true);
+  };
+
+  const handleSave = async () => {
+    if (!teamName.trim()) return;
+    const validMembers = members.filter(m => m.name.trim() && m.email.trim());
+    setSaving(true);
+    try {
+      if (editingTeamId) {
+        await teamsAPI.updateTeam(editingTeamId, { name: teamName.trim(), members: validMembers });
+      } else {
+        await teamsAPI.createTeam({ name: teamName.trim(), members: validMembers });
+      }
+      queryClient.invalidateQueries({ queryKey: ['teams'] });
+      setTeamName('');
+      setMembers([{ name: '', email: '' }]);
+      setShowForm(false);
+      setEditingTeamId(null);
+    } catch (err) {
+      console.error('Failed to save team:', err);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDelete = async (id) => {
+    try {
+      await teamsAPI.deleteTeam(id);
+      queryClient.invalidateQueries({ queryKey: ['teams'] });
+    } catch (err) {
+      console.error('Failed to delete team:', err);
+    }
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center justify-between">
+          <div className="flex items-center space-x-2">
+            <Users className="w-5 h-5 text-gray-600 dark:text-gray-400" />
+            <span>Teams</span>
+          </div>
+          <Button variant="outline" size="sm" onClick={() => {
+            if (showForm && !editingTeamId) {
+              setShowForm(false);
+            } else {
+              setEditingTeamId(null);
+              setTeamName('');
+              setMembers([{ name: '', email: '' }]);
+              setShowForm(true);
+            }
+          }}>
+            {(showForm && !editingTeamId) ? <X className="w-4 h-4" /> : <Plus className="w-4 h-4 mr-1" />}
+            {(showForm && !editingTeamId) ? '' : 'New'}
+          </Button>
+        </CardTitle>
+      </CardHeader>
+      <CardContent>
+        {/* Create form */}
+        {showForm && (
+          <div className="mb-4 p-3 rounded-lg border border-primary-200 dark:border-primary-800 bg-primary-50/50 dark:bg-primary-900/10 space-y-3">
+            <input
+              value={teamName}
+              onChange={e => setTeamName(e.target.value)}
+              placeholder="Team name (e.g. Marketing Team)"
+              className="w-full px-3 py-2 text-sm rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-primary-500"
+            />
+            <div className="space-y-2">
+              <p className="text-xs font-medium text-gray-600 dark:text-gray-400">Members</p>
+              {members.map((m, i) => (
+                <div key={i} className="flex items-center space-x-2">
+                  <input
+                    value={m.name}
+                    onChange={e => updateMember(i, 'name', e.target.value)}
+                    placeholder="Name"
+                    className="flex-1 px-2 py-1.5 text-sm rounded border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
+                  />
+                  <input
+                    value={m.email}
+                    onChange={e => updateMember(i, 'email', e.target.value)}
+                    placeholder="Email"
+                    className="flex-1 px-2 py-1.5 text-sm rounded border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
+                  />
+                  {members.length > 1 && (
+                    <button onClick={() => removeMemberRow(i)} className="text-red-400 hover:text-red-600">
+                      <X className="w-4 h-4" />
+                    </button>
+                  )}
+                </div>
+              ))}
+              <button onClick={addMemberRow} className="text-xs text-primary-600 dark:text-primary-400 hover:underline">+ Add member</button>
+            </div>
+            <div className="flex space-x-2">
+              {editingTeamId && (
+                <Button size="sm" variant="outline" onClick={() => { setShowForm(false); setEditingTeamId(null); }} className="w-1/3">
+                  Cancel
+                </Button>
+              )}
+              <Button size="sm" onClick={handleSave} disabled={saving || !teamName.trim()} className={editingTeamId ? "w-2/3" : "w-full"}>
+                {saving ? (editingTeamId ? 'Updating…' : 'Creating…') : (editingTeamId ? 'Update Team' : 'Create Team')}
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {/* Team list */}
+        <div className="space-y-3">
+          {isLoading ? (
+            <div className="text-center py-4 text-gray-400"><Loader2 className="w-4 h-4 animate-spin inline mr-2" />Loading…</div>
+          ) : teams.length === 0 && !showForm ? (
+            <div className="text-center py-8 text-gray-500 dark:text-gray-400">
+              No teams yet — create one to group contacts
+            </div>
+          ) : (
+            teams.map(team => (
+              <div key={team.id} className="p-3 rounded-lg border border-gray-200 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors">
+                <div className="flex items-center justify-between mb-1">
+                  <span className="font-medium text-sm text-gray-900 dark:text-gray-100">{team.name}</span>
+                  <div className="flex items-center space-x-2">
+                    <span className="text-xs text-gray-500 dark:text-gray-400">{team.members?.length || 0} members</span>
+                    <button onClick={() => handleEdit(team)} className="text-blue-400 hover:text-blue-600" title="Edit team">
+                      <Pencil className="w-3.5 h-3.5" />
+                    </button>
+                    <button onClick={() => handleDelete(team.id)} className="text-red-400 hover:text-red-600" title="Delete team">
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-1">
+                  {(team.members || []).slice(0, 4).map((m, i) => (
+                    <span key={i} className="text-xs px-2 py-0.5 rounded-full bg-primary-100 dark:bg-primary-900/30 text-primary-700 dark:text-primary-300" title={m.email}>
+                      {m.name}
+                    </span>
+                  ))}
+                  {(team.members || []).length > 4 && (
+                    <span className="text-xs text-gray-500 dark:text-gray-400">+{team.members.length - 4} more</span>
+                  )}
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+      </CardContent>
+    </Card>
+  );
+};
+
+// ─── Dashboard Component ──────────────────────────────────────────────────────
 const Dashboard = () => {
-  const { dailyBrief, emails, meetings, todos, notifications, suggestions, isLoading, error, refetch } = useContextualData();
+  const { dailyBrief, emails, meetings, todos, notifications, suggestions, health, isLoading, error, refetch } = useContextualData();
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+
+  // Action states for 1-click buttons
+  const [draftingEmail, setDraftingEmail] = useState(null);
+  const [draftResult, setDraftResult] = useState(null);
+
+  // AI Insights — cached with React Query so they survive page navigation
+  const { data: insightsData, isLoading: insightsLoading } = useQuery({
+    queryKey: ['ai-insights'],
+    queryFn: async () => {
+      const res = await aiAPI.getInsights();
+      return { insights: res.data.insights, conflicts: res.data.conflicts || [] };
+    },
+    staleTime: 10 * 60 * 1000, // 10 minutes — don't re-fetch on every page visit
+    gcTime: 15 * 60 * 1000,
+    retry: 1,
+  });
+  const aiInsights = insightsData?.insights || null;
+  const aiConflicts = insightsData?.conflicts || [];
+
+  // 1-click Draft Reply handler
+  const handleDraftReply = async (emailId) => {
+    setDraftingEmail(emailId);
+    setDraftResult(null);
+    try {
+      const res = await actionsAPI.draftReply(emailId, 'professional');
+      setDraftResult(res.data);
+    } catch (err) {
+      setDraftResult({ success: false, message: 'Failed to create draft' });
+    } finally {
+      setDraftingEmail(null);
+    }
+  };
 
   // Real-time updates
   const handleEmailUpdate = React.useCallback((newEmails) => {
-    // Refresh dashboard data when new emails arrive
-    if (refetch) {
-      refetch();
-    }
+    if (refetch) refetch();
   }, [refetch]);
 
   const handleMeetingUpdate = React.useCallback((newMeetings) => {
-    // Refresh dashboard data when new meetings arrive
-    if (refetch) {
-      refetch();
-    }
+    if (refetch) refetch();
   }, [refetch]);
 
   const { connected } = useRealtimeUpdates(handleEmailUpdate, handleMeetingUpdate);
@@ -70,19 +488,87 @@ const Dashboard = () => {
         )}
       </div>
 
-      {/* Smart Summary - Daily Brief */}
-      {dailyBrief && (
-        <Card className="bg-gradient-to-br from-primary-50 to-primary-100 dark:from-primary-900/20 dark:to-primary-800/20 border-primary-200 dark:border-primary-800">
-          <CardHeader>
-            <CardTitle className="flex items-center space-x-2">
-              <Lightbulb className="w-5 h-5 text-primary-600 dark:text-primary-400" />
-              <span>Daily Brief</span>
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
+      {/* Health Snapshot Banner — links to dedicated Health page */}
+      {health && health.readiness_score !== null ? (
+        <div
+          onClick={() => navigate('/health')}
+          className={`cursor-pointer flex items-center justify-between p-4 rounded-xl border-2 transition-all hover:shadow-md ${
+            health.readiness_score >= 80 ? 'bg-emerald-50 border-emerald-200 dark:bg-emerald-900/20 dark:border-emerald-800' :
+            health.readiness_score >= 60 ? 'bg-amber-50 border-amber-200 dark:bg-amber-900/20 dark:border-amber-800' :
+            'bg-red-50 border-red-200 dark:bg-red-900/20 dark:border-red-800'
+          }`}
+        >
+          <div className="flex items-center space-x-3">
+            <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-white text-sm ${
+              health.readiness_score >= 80 ? 'bg-emerald-500' : health.readiness_score >= 60 ? 'bg-amber-500' : 'bg-red-500'
+            }`}>{health.readiness_score}</div>
+            <div>
+              <p className="font-semibold text-sm text-gray-900 dark:text-gray-100">
+                Readiness: {health.readiness_label} · {health.sleep_hours}h sleep · {health.steps >= 1000 ? `${(health.steps/1000).toFixed(1)}k` : health.steps} steps
+              </p>
+              <p className="text-xs text-gray-500 dark:text-gray-400">Tap to view full Health dashboard →</p>
+            </div>
+          </div>
+          {health.readiness_score < 60 && (
+            <div className="flex items-center space-x-1 text-xs text-red-600 dark:text-red-400 font-medium">
+              <Zap className="w-4 h-4" /><span>Low Energy</span>
+            </div>
+          )}
+        </div>
+      ) : (
+        <div onClick={() => navigate('/health')}
+          className="cursor-pointer flex items-center space-x-3 p-4 rounded-xl border-2 border-dashed border-emerald-300 dark:border-emerald-700 hover:border-emerald-500 dark:hover:border-emerald-500 transition-colors">
+          <Heart className="w-5 h-5 text-emerald-500" />
+          <span className="text-sm text-gray-600 dark:text-gray-400">Set up health tracking for AI-aware scheduling →</span>
+        </div>
+      )}
+
+      {/* AI Insights Panel — Gemini-powered briefing */}
+      <Card className="bg-gradient-to-br from-violet-50 to-purple-100 dark:from-violet-900/20 dark:to-purple-800/20 border-violet-200 dark:border-violet-800">
+        <CardHeader>
+          <CardTitle className="flex items-center space-x-2">
+            <Brain className="w-5 h-5 text-violet-600 dark:text-violet-400" />
+            <span>AI Insights</span>
+            {insightsLoading && <Loader2 className="w-4 h-4 animate-spin text-violet-500" />}
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          {insightsLoading ? (
+            <p className="text-sm text-gray-500 dark:text-gray-400 animate-pulse">Generating your daily briefing…</p>
+          ) : aiInsights ? (
+            <div className="space-y-3">
+              <p className="text-gray-700 dark:text-gray-300 leading-relaxed text-sm whitespace-pre-wrap">{aiInsights}</p>
+              {aiConflicts.length > 0 && (
+                <div className="mt-3 p-3 rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800">
+                  <p className="text-sm font-medium text-red-700 dark:text-red-400 flex items-center space-x-1">
+                    <AlertCircle className="w-4 h-4" />
+                    <span>{aiConflicts.length} scheduling conflict{aiConflicts.length !== 1 ? 's' : ''} detected</span>
+                  </p>
+                  <ul className="mt-1 space-y-1 text-xs text-red-600 dark:text-red-400">
+                    {aiConflicts.map((c, i) => (
+                      <li key={i}>⚠ "{c.meeting_a?.title}" overlaps with "{c.meeting_b?.title}"</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          ) : dailyBrief ? (
             <p className="text-gray-700 dark:text-gray-300 leading-relaxed">{dailyBrief.summary}</p>
-          </CardContent>
-        </Card>
+          ) : (
+            <p className="text-sm text-gray-500 dark:text-gray-400">No insights available yet.</p>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Draft result toast */}
+      {draftResult && (
+        <div className={`p-3 rounded-lg border text-sm flex items-center justify-between ${draftResult.success
+          ? 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800 text-green-700 dark:text-green-300'
+          : 'bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800 text-red-700 dark:text-red-300'
+        }`}>
+          <span>{draftResult.message}</span>
+          <button onClick={() => setDraftResult(null)} className="ml-2 hover:opacity-70"><X className="w-4 h-4" /></button>
+        </div>
       )}
 
       {/* Main Grid Layout */}
@@ -105,16 +591,12 @@ const Dashboard = () => {
               {emails.map((email) => (
                 <div
                   key={email.id}
-                  className="p-3 rounded-lg border border-gray-200 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors cursor-pointer"
-                  onClick={() => {
-                    if (email.thread_id) {
-                      window.location.href = `/emails?thread=${email.thread_id}`;
-                    } else {
-                      window.location.href = `/emails/${email.id}`;
-                    }
-                  }}
+                  className="p-3 rounded-lg border border-gray-200 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors"
                 >
-                  <div className="flex items-start justify-between mb-1">
+                  <div className="flex items-start justify-between mb-1 cursor-pointer" onClick={() => {
+                    if (email.thread_id) window.location.href = `/emails?thread=${email.thread_id}`;
+                    else window.location.href = `/emails/${email.id}`;
+                  }}>
                     <div className="flex items-center space-x-2 flex-1 min-w-0">
                       <span className="font-medium text-sm text-gray-900 dark:text-gray-100 truncate">
                         {email.from_email || 'Unknown'}
@@ -130,14 +612,24 @@ const Dashboard = () => {
                       {email.time}
                     </span>
                   </div>
-                  <p
-                    className="text-sm font-medium text-gray-800 dark:text-gray-200 mb-1 group-hover:text-primary-600 dark:group-hover:text-primary-400"
-                  >
-                    {email.subject}
-                  </p>
-                  <p className="text-xs text-gray-600 dark:text-gray-400 line-clamp-2">
-                    {email.preview}
-                  </p>
+                  <p className="text-sm font-medium text-gray-800 dark:text-gray-200 mb-1">{email.subject}</p>
+                  <p className="text-xs text-gray-600 dark:text-gray-400 line-clamp-2">{email.preview}</p>
+
+                  {/* 1-Click Draft Reply button */}
+                  {email.priority === 'high' && (
+                    <Button
+                      size="sm" variant="outline"
+                      className="mt-2 text-xs h-7 border-violet-300 dark:border-violet-700 text-violet-700 dark:text-violet-300 hover:bg-violet-100 dark:hover:bg-violet-900/30"
+                      onClick={(e) => { e.stopPropagation(); handleDraftReply(email.id); }}
+                      disabled={draftingEmail === email.id}
+                    >
+                      {draftingEmail === email.id ? (
+                        <><Loader2 className="w-3 h-3 animate-spin mr-1" />Drafting…</>
+                      ) : (
+                        <><Send className="w-3 h-3 mr-1" />AI Draft Reply</>
+                      )}
+                    </Button>
+                  )}
                 </div>
               ))}
               {emails.length === 0 && (
@@ -217,61 +709,8 @@ const Dashboard = () => {
           </CardContent>
         </Card>
 
-        {/* To-Do List / Action Items */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center justify-between">
-              <div className="flex items-center space-x-2">
-                <CheckSquare className="w-5 h-5 text-gray-600 dark:text-gray-400" />
-                <span>Action Items</span>
-              </div>
-              <span className="text-xs font-normal text-gray-500 dark:text-gray-400">
-                {todos.length} items
-              </span>
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-3">
-              {todos.map((todo) => (
-                <div
-                  key={todo.id}
-                  className="flex items-start space-x-3 p-3 rounded-lg border border-gray-200 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors"
-                >
-                  <input
-                    type="checkbox"
-                    className="mt-1 w-4 h-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
-                  />
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium text-gray-900 dark:text-gray-100">
-                      {todo.task}
-                    </p>
-                    <div className="flex items-center space-x-2 mt-1">
-                      <span className={`text-xs px-2 py-0.5 rounded-full ${todo.priority === 'high'
-                        ? 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400'
-                        : todo.priority === 'medium'
-                          ? 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400'
-                          : 'bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-400'
-                        }`}>
-                        {todo.priority}
-                      </span>
-                      <span className="text-xs text-gray-500 dark:text-gray-400">
-                        Due: {todo.dueDate}
-                      </span>
-                      <span className="text-xs text-gray-500 dark:text-gray-400">
-                        • {todo.category}
-                      </span>
-                    </div>
-                  </div>
-                </div>
-              ))}
-              {todos.length === 0 && (
-                <div className="text-center py-8 text-gray-500 dark:text-gray-400">
-                  No action items
-                </div>
-              )}
-            </div>
-          </CardContent>
-        </Card>
+        {/* Teams Panel */}
+        <TeamsCard />
 
         {/* Notifications Panel */}
         <Card>
@@ -342,7 +781,11 @@ const Dashboard = () => {
                   <p className="text-sm text-gray-700 dark:text-gray-300 mb-3">
                     {suggestion.message}
                   </p>
-                  <Button variant="outline" size="sm" className="w-full">
+                  <Button variant="outline" size="sm" className="w-full" onClick={() => {
+                      if (suggestion.action === 'View Emails') navigate('/emails');
+                      else if (suggestion.action === 'View Tasks') navigate('/chat');
+                      else if (suggestion.action === 'View Meetings') navigate('/meetings');
+                    }}>
                     {suggestion.action}
                   </Button>
                 </div>

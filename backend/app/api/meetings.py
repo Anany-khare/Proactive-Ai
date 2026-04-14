@@ -6,10 +6,35 @@ from app.core.models import User, ServiceToken, Notification
 from app.core.schemas import MeetingResponse, MeetingCreate, MeetingUpdate
 from app.core.google_services import CalendarService
 from app.api.dashboard import get_google_credentials
-from typing import List
+from typing import List, Optional
 from datetime import datetime, timedelta
+import re
 
 router = APIRouter(prefix="/api/meetings", tags=["meetings"])
+
+def _sanitize_rfc3339(dt_str: str) -> str:
+    """
+    Ensure a datetime string is valid RFC 3339 for the Google Calendar API.
+    Strips trailing 'Z' from offset-aware strings, or appends 'Z' if naive.
+    Adds seconds if missing from 'datetime-local' input formats.
+    """
+    if not dt_str:
+        return dt_str
+        
+    dt_str = str(dt_str)
+    # Fix datetime-local missing seconds ("YYYY-MM-DDThh:mm")
+    if len(dt_str) == 16 and dt_str[10] == 'T':
+        dt_str += ':00'
+    elif len(dt_str) == 17 and dt_str.endswith('Z') and dt_str[10] == 'T':
+        dt_str = dt_str[:-1] + ':00Z'
+
+    # If the string has a UTC offset like +00:00 *and* a trailing Z, remove the Z
+    if re.search(r'[+-]\d{2}:\d{2}Z$', dt_str):
+        dt_str = dt_str[:-1]
+    # If the string is entirely naive (no Z, no offset), append Z for UTC
+    if not dt_str.endswith('Z') and '+' not in dt_str and not re.search(r'-\d{2}:\d{2}$', dt_str):
+        dt_str += 'Z'
+    return dt_str
 
 @router.post("/", response_model=MeetingResponse)
 async def create_meeting(
@@ -29,8 +54,8 @@ async def create_meeting(
         calendar_service = CalendarService(credentials)
         event = calendar_service.create_event(
             title=meeting_data.title,
-            start_datetime=meeting_data.start_datetime,
-            end_datetime=meeting_data.end_datetime,
+            start_datetime=_sanitize_rfc3339(meeting_data.start_datetime),
+            end_datetime=_sanitize_rfc3339(meeting_data.end_datetime),
             location=meeting_data.location,
             description=meeting_data.description,
             attendees=meeting_data.attendees
@@ -117,8 +142,8 @@ async def update_meeting(
         event = calendar_service.update_event(
             event_id=event_id,
             title=meeting_data.title,
-            start_datetime=meeting_data.start_datetime,
-            end_datetime=meeting_data.end_datetime,
+            start_datetime=_sanitize_rfc3339(meeting_data.start_datetime) if meeting_data.start_datetime else None,
+            end_datetime=_sanitize_rfc3339(meeting_data.end_datetime) if meeting_data.end_datetime else None,
             location=meeting_data.location,
             description=meeting_data.description,
             attendees=meeting_data.attendees
@@ -227,7 +252,7 @@ async def get_events_by_date_range(
 
 @router.get("/calendar/week", response_model=List[MeetingResponse])
 async def get_weekly_events(
-    week_start: str = None,  # ISO format date string
+    week_start: Optional[str] = None,  # ISO format date string
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -254,15 +279,9 @@ async def get_weekly_events(
         
         end_date = start_date + timedelta(days=7)
         
-        # Format for Google Calendar API (RFC3339) using 'Z' for UTC
-        # Ensure we are passing UTC-like string if naive
-        start_iso = start_date.isoformat()
-        if not start_iso.endswith('Z') and '+' not in start_iso:
-             start_iso += 'Z'
-             
-        end_iso = end_date.isoformat()
-        if not end_iso.endswith('Z') and '+' not in end_iso:
-             end_iso += 'Z'
+        # Format for Google Calendar API — sanitize to valid RFC 3339
+        start_iso = _sanitize_rfc3339(start_date.isoformat())
+        end_iso = _sanitize_rfc3339(end_date.isoformat())
         
         calendar_service = CalendarService(credentials)
         # Increase limit just in case
@@ -279,7 +298,7 @@ async def get_weekly_events(
 
 @router.get("/calendar/month", response_model=List[MeetingResponse])
 async def get_monthly_events(
-    month: str = None,  # Format: YYYY-MM
+    month: Optional[str] = None,  # Format: YYYY-MM
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -306,9 +325,9 @@ async def get_monthly_events(
         else:
             end_date = datetime(start_date.year, start_date.month + 1, 1)
         
-        # Format for Google Calendar API
-        start_iso = start_date.isoformat() + 'Z'
-        end_iso = end_date.isoformat() + 'Z'
+        # Format for Google Calendar API — sanitize to valid RFC 3339
+        start_iso = _sanitize_rfc3339(start_date.isoformat())
+        end_iso = _sanitize_rfc3339(end_date.isoformat())
         
         calendar_service = CalendarService(credentials)
         events = calendar_service.get_events_by_date_range(start_iso, end_iso, 500)

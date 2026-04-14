@@ -37,6 +37,9 @@ class User(Base):
     push_subscriptions = relationship("PushSubscription", back_populates="user", cascade="all, delete-orphan")
     emails = relationship("Email", back_populates="user", cascade="all, delete-orphan")
     meetings = relationship("Meeting", back_populates="user", cascade="all, delete-orphan")
+    chat_messages = relationship("ChatMessage", back_populates="user", cascade="all, delete-orphan")
+    teams = relationship("Team", back_populates="user", cascade="all, delete-orphan")
+    health_data = relationship("HealthData", back_populates="user", cascade="all, delete-orphan")
 
 class ServiceToken(Base):
     __tablename__ = "service_tokens"
@@ -166,3 +169,54 @@ class Meeting(Base):
     # Relationship
     user = relationship("User", back_populates="meetings")
 
+class ChatMessage(Base):
+    __tablename__ = "chat_messages"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    role = Column(String, nullable=False)  # 'user' or 'assistant'
+    content = Column(Text, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    
+    __table_args__ = (
+        Index('idx_chat_user_created', 'user_id', 'created_at'),
+    )
+
+    # Relationship
+    user = relationship("User", back_populates="chat_messages")
+
+class Team(Base):
+    __tablename__ = "teams"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    name = Column(String, nullable=False)  # e.g. "Marketing Team"
+    members = Column(JSON, nullable=False, default=[])  # [{"name": "John", "email": "john@co.com"}, ...]
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    
+    # Relationship
+    user = relationship("User", back_populates="teams")
+
+class HealthData(Base):
+    __tablename__ = "health_data"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    date = Column(String, nullable=False)  # YYYY-MM-DD
+    sleep_minutes = Column(Integer, nullable=True)  # Total sleep in minutes
+    sleep_score = Column(Integer, nullable=True)  # 0-100 quality score
+    steps = Column(Integer, nullable=True, default=0)
+    resting_heart_rate = Column(Integer, nullable=True)
+    calories_burned = Column(Integer, nullable=True)
+    active_minutes = Column(Integer, nullable=True)
+    source = Column(String, default="fitbit")  # fitbit, manual, etc.
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    
+    __table_args__ = (
+        Index('idx_health_user_date', 'user_id', 'date', unique=True),
+    )
+    
+    # Relationship
+    user = relationship("User", back_populates="health_data")

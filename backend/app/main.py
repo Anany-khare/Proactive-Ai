@@ -2,7 +2,7 @@ from fastapi import FastAPI
 # Force reload
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
-from app.api import auth, dashboard, emails, meetings, realtime, push, admin, ai
+from app.api import auth, dashboard, emails, meetings, realtime, push, admin, ai, teams, health, actions
 from app.core.logging import configure_logging
 
 # Configure logging immediately
@@ -32,6 +32,9 @@ app.include_router(realtime.router)
 app.include_router(push.router)
 app.include_router(admin.router)
 app.include_router(ai.router)
+app.include_router(teams.router)
+app.include_router(health.router)
+app.include_router(actions.router)
 
 @app.get("/health")
 def health_check():

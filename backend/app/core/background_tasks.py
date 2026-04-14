@@ -100,7 +100,7 @@ def sync_user_data(user_id: int):
         # Sync calendar events
         try:
             calendar_service = CalendarService(credentials)
-            meetings_data = calendar_service.get_upcoming_events(max_results=20)
+            meetings_data = calendar_service.get_upcoming_events(max_results=100)
             
             if meetings_data:
                 # Deduplicate events by ID to prevent IntegrityError

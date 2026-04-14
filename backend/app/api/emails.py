@@ -12,6 +12,7 @@ from app.core.google_services import GmailService
 from app.api.dashboard import get_google_credentials
 from typing import List, Optional
 import base64
+from email.utils import parsedate_to_datetime
 from app.api.dashboard import trigger_sync_if_needed, get_time_ago
 
 def mark_gmail_read_bg(user_id: int, message_id: str):
@@ -41,7 +42,8 @@ router = APIRouter(prefix="/api/emails", tags=["emails"])
 async def get_email(
     message_id: str,
     current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    background_tasks: BackgroundTasks = BackgroundTasks()
 ):
     """Get full email details by message ID (Cached)"""
     
@@ -159,7 +161,6 @@ async def get_email(
             except Exception:
                  pass
 
-        return EmailDetailResponse(**email_data)
         return EmailDetailResponse(**email_data)
     except Exception as e:
         print(f"Error fetching email {message_id}: {e}") # Debug print
@@ -333,7 +334,6 @@ async def get_email_thread(
         
         # Mark all messages in thread as read in local DB and sync to Gmail
         from app.core.models import Email
-        from app.core.google_services import parsedate_to_datetime
         from app.core.cache import cache
         
         updated_read_status = False

@@ -1,15 +1,21 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Card, CardHeader, CardTitle, CardContent } from './ui/card.jsx';
 import { meetingAPI } from '../utils/api.jsx';
 import { Button } from './ui/button.jsx';
 import { ChevronLeft, ChevronRight, Plus, Calendar, Clock, MapPin, Users } from 'lucide-react';
 import { Dialog, DialogTrigger, DialogContent, DialogHeader, DialogTitle } from './ui/dialog.jsx';
 import { Loader2 } from 'lucide-react';
+import { useQuery, keepPreviousData } from '@tanstack/react-query';
+
+// Standalone helper (used in useMemo before component methods are defined)
+function getWeekStartStatic(date) {
+  const d = new Date(date);
+  const day = d.getDay();
+  const diff = d.getDate() - day + (day === 0 ? -6 : 1);
+  return new Date(d.setDate(diff));
+}
 
 const CalendarView = ({ view = 'week', onMeetingClick, onCreateMeeting, onViewChange }) => {
-  const [events, setEvents] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
   const [currentDate, setCurrentDate] = useState(new Date());
   const [showCreateDialog, setShowCreateDialog] = useState(false);
   const [newMeeting, setNewMeeting] = useState({
@@ -21,19 +27,27 @@ const CalendarView = ({ view = 'week', onMeetingClick, onCreateMeeting, onViewCh
     attendees: []
   });
   const [isCreating, setIsCreating] = useState(false);
-  // const { toast } = useToast(); // Hook not available
 
-  useEffect(() => {
-    fetchEvents();
-  }, [currentDate, view]);
+  // Build a stable query key based on view + date
+  const queryKey = useMemo(() => {
+    if (view === 'week') {
+      const weekStart = getWeekStartStatic(currentDate).toISOString();
+      return ['calendar-events', 'week', weekStart];
+    } else if (view === 'month') {
+      const month = `${currentDate.getFullYear()}-${String(currentDate.getMonth() + 1).padStart(2, '0')}`;
+      return ['calendar-events', 'month', month];
+    } else {
+      const dayStr = currentDate.toISOString().split('T')[0];
+      return ['calendar-events', 'day', dayStr];
+    }
+  }, [view, currentDate]);
 
-  const fetchEvents = async () => {
-    setLoading(true);
-    setError(null);
-    try {
+  const { data: events = [], isLoading: loading, error } = useQuery({
+    queryKey,
+    queryFn: async () => {
       let response;
       if (view === 'week') {
-        const weekStart = getWeekStart(currentDate).toISOString();
+        const weekStart = getWeekStartStatic(currentDate).toISOString();
         response = await meetingAPI.getWeeklyEvents(weekStart);
       } else if (view === 'month') {
         const month = `${currentDate.getFullYear()}-${String(currentDate.getMonth() + 1).padStart(2, '0')}`;
@@ -45,19 +59,13 @@ const CalendarView = ({ view = 'week', onMeetingClick, onCreateMeeting, onViewCh
         end.setHours(23, 59, 59, 999);
         response = await meetingAPI.getEventsByRange(start.toISOString(), end.toISOString());
       }
-      setEvents(response.data || []);
-    } catch (err) {
-      console.error('Error fetching events:', err);
-      setError('Failed to load events');
-      // toast({
-      //   title: "Error",
-      //   description: "Failed to load calendar events",
-      //   variant: "destructive",
-      // });
-    } finally {
-      setLoading(false);
-    }
-  };
+      return response.data || [];
+    },
+    staleTime: 5 * 60 * 1000, // 5 minutes
+    gcTime: 10 * 60 * 1000,
+    placeholderData: keepPreviousData, // Show old data while new data loads
+    retry: 1,
+  });
 
   const getWeekStart = (date) => {
     const d = new Date(date);
@@ -128,8 +136,14 @@ const CalendarView = ({ view = 'week', onMeetingClick, onCreateMeeting, onViewCh
         ? newMeeting.attendees.split(',').map(e => e.trim()).filter(e => e)
         : [];
 
+      const formatRFC3339 = (localStr) => {
+        return new Date(localStr).toISOString().split('.')[0] + 'Z';
+      };
+
       await meetingAPI.createMeeting({
         ...newMeeting,
+        start_datetime: formatRFC3339(newMeeting.start_datetime),
+        end_datetime: formatRFC3339(newMeeting.end_datetime),
         attendees
       });
 
@@ -164,15 +178,22 @@ const CalendarView = ({ view = 'week', onMeetingClick, onCreateMeeting, onViewCh
     setCurrentDate(newDate);
   };
 
+  const getMinDateTime = () => {
+    const tzoffset = (new Date()).getTimezoneOffset() * 60000;
+    return (new Date(Date.now() - tzoffset)).toISOString().slice(0, 16);
+  };
+
   const today = () => setCurrentDate(new Date());
 
-  if (loading) {
+  if (loading && events.length === 0) {
     return (
-      <Card>
-        <CardContent className="flex items-center justify-center h-64">
-          <Loader2 className="h-8 w-8 animate-spin text-primary-600" />
-        </CardContent>
-      </Card>
+      <div className="space-y-4">
+        <div className="grid grid-cols-7 gap-2">
+          {[1, 2, 3, 4, 5, 6, 7].map((i) => (
+            <div key={i} className="h-48 bg-gray-100 dark:bg-gray-800 rounded-lg animate-pulse"></div>
+          ))}
+        </div>
+      </div>
     );
   }
 
@@ -217,82 +238,85 @@ const CalendarView = ({ view = 'week', onMeetingClick, onCreateMeeting, onViewCh
                     New Meeting
                   </Button>
                 </DialogTrigger>
-                <DialogContent className="max-w-2xl">
-                  <DialogHeader>
-                    <DialogTitle>Create New Meeting</DialogTitle>
+                <DialogContent className="max-w-xl bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-800 shadow-2xl rounded-2xl p-6 sm:p-8">
+                  <DialogHeader className="mb-4">
+                    <DialogTitle className="text-2xl font-bold text-gray-900 dark:text-white">Schedule Meeting</DialogTitle>
                   </DialogHeader>
-                  <div className="space-y-4">
+                  <div className="space-y-5">
                     <div>
-                      <label className="block text-sm font-medium mb-2">Title *</label>
+                      <label className="block text-sm font-semibold mb-1.5 text-gray-700 dark:text-gray-300">Title <span className="text-red-500">*</span></label>
                       <input
                         type="text"
                         value={newMeeting.title}
                         onChange={(e) => setNewMeeting({ ...newMeeting, title: e.target.value })}
-                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-700 rounded-md bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
-                        placeholder="Meeting title"
+                        className="w-full px-4 py-3 text-sm border border-gray-200 dark:border-gray-700 rounded-xl bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-primary-500 focus:border-transparent outline-none transition-all shadow-sm"
+                        placeholder="e.g. Product Sync"
                       />
                     </div>
-                    <div className="grid grid-cols-2 gap-4">
+                    <div className="grid grid-cols-2 gap-5">
                       <div>
-                        <label className="block text-sm font-medium mb-2">Start Date & Time *</label>
+                        <label className="block text-sm font-semibold mb-1.5 text-gray-700 dark:text-gray-300">Start Date & Time <span className="text-red-500">*</span></label>
                         <input
                           type="datetime-local"
+                          min={getMinDateTime()}
                           value={newMeeting.start_datetime}
                           onChange={(e) => setNewMeeting({ ...newMeeting, start_datetime: e.target.value })}
-                          className="w-full px-3 py-2 border border-gray-300 dark:border-gray-700 rounded-md bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
+                          className="w-full px-4 py-3 text-sm border border-gray-200 dark:border-gray-700 rounded-xl bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-primary-500 focus:border-transparent outline-none transition-all shadow-sm [color-scheme:light] dark:[color-scheme:dark] cursor-pointer"
                         />
                       </div>
                       <div>
-                        <label className="block text-sm font-medium mb-2">End Date & Time *</label>
+                        <label className="block text-sm font-semibold mb-1.5 text-gray-700 dark:text-gray-300">End Date & Time <span className="text-red-500">*</span></label>
                         <input
                           type="datetime-local"
+                          min={newMeeting.start_datetime || getMinDateTime()}
                           value={newMeeting.end_datetime}
                           onChange={(e) => setNewMeeting({ ...newMeeting, end_datetime: e.target.value })}
-                          className="w-full px-3 py-2 border border-gray-300 dark:border-gray-700 rounded-md bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
+                          className="w-full px-4 py-3 text-sm border border-gray-200 dark:border-gray-700 rounded-xl bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-primary-500 focus:border-transparent outline-none transition-all shadow-sm [color-scheme:light] dark:[color-scheme:dark] cursor-pointer"
                         />
                       </div>
                     </div>
                     <div>
-                      <label className="block text-sm font-medium mb-2">Location</label>
+                      <label className="block text-sm font-semibold mb-1.5 text-gray-700 dark:text-gray-300">Location</label>
                       <input
                         type="text"
                         value={newMeeting.location}
                         onChange={(e) => setNewMeeting({ ...newMeeting, location: e.target.value })}
-                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-700 rounded-md bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
-                        placeholder="Meeting location"
+                        className="w-full px-4 py-3 text-sm border border-gray-200 dark:border-gray-700 rounded-xl bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-primary-500 focus:border-transparent outline-none transition-all shadow-sm"
+                        placeholder="Google Meet or Conference Room"
                       />
                     </div>
                     <div>
-                      <label className="block text-sm font-medium mb-2">Description</label>
+                      <label className="block text-sm font-semibold mb-1.5 text-gray-700 dark:text-gray-300">Description</label>
                       <textarea
                         value={newMeeting.description}
                         onChange={(e) => setNewMeeting({ ...newMeeting, description: e.target.value })}
-                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-700 rounded-md bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
-                        rows={4}
-                        placeholder="Meeting description"
+                        className="w-full px-4 py-3 text-sm border border-gray-200 dark:border-gray-700 rounded-xl bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-primary-500 focus:border-transparent outline-none transition-all shadow-sm resize-none"
+                        rows={3}
+                        placeholder="Agenda or context for the meeting..."
                       />
                     </div>
                     <div>
-                      <label className="block text-sm font-medium mb-2">Attendees (comma-separated emails)</label>
+                      <label className="block text-sm font-semibold mb-1.5 text-gray-700 dark:text-gray-300">Attendees</label>
                       <input
                         type="text"
                         value={newMeeting.attendees}
                         onChange={(e) => setNewMeeting({ ...newMeeting, attendees: e.target.value })}
-                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-700 rounded-md bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100"
-                        placeholder="email1@example.com, email2@example.com"
+                        className="w-full px-4 py-3 text-sm border border-gray-200 dark:border-gray-700 rounded-xl bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-primary-500 focus:border-transparent outline-none transition-all shadow-sm"
+                        placeholder="Separated by commas (e.g. john@company.com)"
                       />
                     </div>
-                    <div className="flex justify-end space-x-2">
+                    <div className="flex justify-end space-x-3 pt-3">
                       <Button
                         variant="outline"
                         onClick={() => setShowCreateDialog(false)}
+                        className="px-6 rounded-xl font-medium"
                       >
                         Cancel
                       </Button>
                       <Button
                         onClick={handleCreateMeeting}
                         disabled={isCreating}
-                        className="bg-primary-600 hover:bg-primary-700 text-white"
+                        className="px-6 rounded-xl font-medium bg-gradient-to-r from-primary-600 to-primary-500 hover:from-primary-700 hover:to-primary-600 text-white shadow-md border-0"
                       >
                         {isCreating ? (
                           <>
@@ -300,7 +324,7 @@ const CalendarView = ({ view = 'week', onMeetingClick, onCreateMeeting, onViewCh
                             Creating...
                           </>
                         ) : (
-                          'Create Meeting'
+                          'Schedule Meeting'
                         )}
                       </Button>
                     </div>

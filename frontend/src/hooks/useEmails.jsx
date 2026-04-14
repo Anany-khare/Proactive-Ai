@@ -18,18 +18,16 @@ export function useEmails(searchQuery = '', maxResults = 20, enabled = true) {
     } = useInfiniteQuery({
         queryKey: queryKey,
         queryFn: async ({ pageParam = null }) => {
-            console.log('Fetching emails page...', pageParam);
             try {
                 const response = await emailAPI.getAllEmails(searchQuery, maxResults, pageParam);
                 // Backend now returns { items: [], next_page_token: "..." }
                 return response.data;
             } catch (error) {
-                console.error('Error fetching emails:', error);
                 throw error;
             }
         },
         getNextPageParam: (lastPage) => lastPage.next_page_token || undefined,
-        // Keep data fresh for 5 minutes
+        // Keep data fresh for 5 minutes (instant page switching)
         staleTime: 5 * 60 * 1000,
         // Keep in cache for 10 minutes
         gcTime: 10 * 60 * 1000,

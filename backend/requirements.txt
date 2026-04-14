@@ -43,3 +43,5 @@ httpx==0.25.2
 cryptography>=41.0.0
 # Date/Time
 python-dateutil==2.8.2
+# AI
+google-generativeai>=0.3.0
