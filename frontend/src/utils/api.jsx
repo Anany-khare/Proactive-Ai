@@ -50,6 +50,9 @@ export const authAPI = {
   // Get user profile with stats
   getUserProfile: () => apiClient.get('/auth/profile'),
 
+  // Update user profile settings
+  updateProfile: (data) => apiClient.patch('/auth/profile', data),
+
   // Handle OAuth callback (token is in URL)
   handleCallback: (token) => {
     localStorage.setItem('auth_token', token);
@@ -131,6 +134,9 @@ export const meetingAPI = {
   // Delete meeting
   deleteMeeting: (eventId) => apiClient.delete(`/api/meetings/${eventId}`),
 
+  // Manually reschedule meeting (with emails)
+  rescheduleMeetingManual: (eventId, data) => apiClient.post(`/api/meetings/${eventId}/reschedule-manual`, data),
+
   // Get weekly events
   getWeeklyEvents: (weekStart = null) =>
     apiClient.get('/api/meetings/calendar/week', { params: weekStart ? { week_start: weekStart } : {} }),
@@ -205,18 +211,16 @@ export const aiAPI = {
   // Ask Gemini for rescheduling suggestions for conflicts
   resolveConflicts: () => apiClient.post('/api/ai/conflicts/resolve'),
 
-  // Get Gemini-powered email priority summary
-  getEmailSummary: () => apiClient.get('/api/ai/email-summary'),
-
-  // Auto-reschedule: run the full proactive pipeline
-  autoReschedule: () => apiClient.post('/api/ai/auto-reschedule'),
-
-  // Find free calendar slots
-  getFreeSlots: (duration = 60, days = 7) =>
-    apiClient.get(`/api/ai/free-slots?duration=${duration}&days=${days}`),
-
-  // Smart email reply (calendar-aware)
+  // Email smart actions
   smartReply: (emailId) => apiClient.post('/api/ai/smart-reply', { email_id: emailId }),
+  extractMeeting: (text) => apiClient.post('/api/ai/meeting/extract', { text }),
+  logProactiveAction: (logData) => apiClient.post('/api/ai/log-action', logData),
+
+  // Proactive rescheduling
+  autoReschedule: () => apiClient.post('/api/ai/auto-reschedule'),
+  getFreeSlots: (duration = 60, days = 7) => apiClient.get(`/api/ai/free-slots?duration=${duration}&days=${days}`),
+  executeProactiveSync: (emailId, meetingInfo, plan) => 
+    apiClient.post('/api/ai/execute-proactive-sync', { email_id: emailId, meeting_info: meetingInfo, plan }),
 };
 
 // Teams API

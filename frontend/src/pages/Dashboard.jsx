@@ -2,11 +2,15 @@ import React, { useState } from 'react';
 import { Card, CardHeader, CardTitle, CardContent } from '../components/ui/card.jsx';
 import { useContextualData } from '../hooks/useContextualData.jsx';
 import { useRealtimeUpdates } from '../hooks/useRealtimeUpdates.jsx';
-import { Mail, Calendar, Bell, Lightbulb, Clock, AlertCircle, Brain, Loader2, Users, Plus, Trash2, X, Pencil, Heart, Zap, Send } from 'lucide-react';
+import { Mail, Calendar, Bell, Lightbulb, Clock, AlertCircle, Brain, Loader2, Users, Plus, Trash2, X, Pencil, Heart, Zap, Send, Video, ExternalLink, MapPin } from 'lucide-react';
 import { Button } from '../components/ui/button.jsx';
-import { aiAPI, teamsAPI, actionsAPI } from '../utils/api.jsx';
+import { aiAPI, teamsAPI, actionsAPI, meetingAPI, healthAPI } from '../utils/api.jsx';
+import FormattedAIResponse from '../components/FormattedAIResponse.jsx';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../components/ui/dialog.jsx';
+import { Moon, Footprints, Activity, RefreshCw, Link, ToggleLeft, ToggleRight } from 'lucide-react';
+import { useAuth } from '../context/AuthContext.jsx';
 
 // ─── Circular Progress Ring ──────────────────────────────────────────────────
 const CircularProgress = ({ value, max, size = 64, strokeWidth = 5, color = '#8b5cf6', label, sublabel }) => {
@@ -398,11 +402,17 @@ const TeamsCard = () => {
 const Dashboard = () => {
   const { dailyBrief, emails, meetings, todos, notifications, suggestions, health, isLoading, error, refetch } = useContextualData();
   const navigate = useNavigate();
+  const { user, updateAutoPilot } = useAuth();
   const queryClient = useQueryClient();
 
   // Action states for 1-click buttons
   const [draftingEmail, setDraftingEmail] = useState(null);
   const [draftResult, setDraftResult] = useState(null);
+  
+  // Meeting Detail states
+  const [selectedMeeting, setSelectedMeeting] = useState(null);
+  const [showMeetingDialog, setShowMeetingDialog] = useState(false);
+  const [deletingMeeting, setDeletingMeeting] = useState(false);
 
   // AI Insights — cached with React Query so they survive page navigation
   const { data: insightsData, isLoading: insightsLoading } = useQuery({
@@ -429,6 +439,23 @@ const Dashboard = () => {
       setDraftResult({ success: false, message: 'Failed to create draft' });
     } finally {
       setDraftingEmail(null);
+    }
+  };
+
+  const handleDeleteMeeting = async (eventId) => {
+    if (!confirm('Are you sure you want to delete this meeting? This will remove it from your Google Calendar.')) return;
+    setDeletingMeeting(true);
+    try {
+      await meetingAPI.deleteMeeting(eventId);
+      setShowMeetingDialog(false);
+      setSelectedMeeting(null);
+      if (refetch) refetch();
+      queryClient.invalidateQueries({ queryKey: ['ai-insights'] });
+    } catch (err) {
+      console.error('Failed to delete meeting:', err);
+      alert('Failed to delete meeting. Please try again.');
+    } finally {
+      setDeletingMeeting(false);
     }
   };
 
@@ -480,14 +507,8 @@ const Dashboard = () => {
             <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">{dailyBrief.date}</p>
           )}
         </div>
-        {connected && (
-          <div className="flex items-center space-x-2 text-green-600 dark:text-green-400">
-            <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
-            <span className="text-sm">Real-time updates active</span>
           </div>
-        )}
-      </div>
-
+          {/* Auto-Pilot toggle removed. */}
       {/* Health Snapshot Banner — links to dedicated Health page */}
       {health && health.readiness_score !== null ? (
         <div
@@ -537,7 +558,7 @@ const Dashboard = () => {
             <p className="text-sm text-gray-500 dark:text-gray-400 animate-pulse">Generating your daily briefing…</p>
           ) : aiInsights ? (
             <div className="space-y-3">
-              <p className="text-gray-700 dark:text-gray-300 leading-relaxed text-sm whitespace-pre-wrap">{aiInsights}</p>
+              <FormattedAIResponse text={aiInsights} className="text-gray-700 dark:text-gray-300" />
               {aiConflicts.length > 0 && (
                 <div className="mt-3 p-3 rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800">
                   <p className="text-sm font-medium text-red-700 dark:text-red-400 flex items-center space-x-1">
@@ -656,10 +677,11 @@ const Dashboard = () => {
           </CardHeader>
           <CardContent>
             <div className="space-y-3">
-              {meetings.slice(0, 3).map((meeting) => (
+              {meetings.slice(0, 5).map((meeting) => (
                 <div
                   key={meeting.id}
-                  className="p-3 rounded-lg border border-gray-200 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors"
+                  onClick={() => { setSelectedMeeting(meeting); setShowMeetingDialog(true); }}
+                  className="p-3 rounded-lg border border-gray-200 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-all cursor-pointer group shadow-sm hover:shadow-md"
                 >
                   <div className="flex items-start justify-between mb-2">
                     <div className="flex-1">
@@ -698,6 +720,12 @@ const Dashboard = () => {
                       )}
                     </div>
                   </div>
+                  {meeting.meet_link && (
+                    <div className="mt-2 flex items-center text-xs text-blue-600 dark:text-blue-400 font-medium group-hover:underline">
+                      <Video className="w-3 h-3 mr-1" />
+                      Virtual Meeting Details
+                    </div>
+                  )}
                 </div>
               ))}
               {meetings.length === 0 && (
@@ -776,7 +804,7 @@ const Dashboard = () => {
               {suggestions.map((suggestion) => (
                 <div
                   key={suggestion.id}
-                  className="p-4 rounded-lg bg-white dark:bg-gray-800 border border-blue-200 dark:border-blue-800"
+                  className="p-4 rounded-lg bg-white dark:bg-gray-800 border border-blue-200 dark:border-blue-800 shadow-sm"
                 >
                   <p className="text-sm text-gray-700 dark:text-gray-300 mb-3">
                     {suggestion.message}
@@ -794,6 +822,89 @@ const Dashboard = () => {
           </CardContent>
         </Card>
       )}
+
+      {/* Meeting Detail Dialog */}
+      <Dialog open={showMeetingDialog} onOpenChange={setShowMeetingDialog}>
+        <DialogContent className="max-w-md bg-white dark:bg-gray-900 border-gray-200 dark:border-gray-800">
+          <DialogHeader>
+            <DialogTitle className="text-xl font-bold text-gray-900 dark:text-gray-100">
+              {selectedMeeting?.title || 'Meeting Details'}
+            </DialogTitle>
+            <DialogDescription className="text-gray-500 dark:text-gray-400">
+              View attendees and location for this event.
+            </DialogDescription>
+          </DialogHeader>
+          
+          {selectedMeeting && (
+            <div className="space-y-4 py-2">
+              <div className="flex items-center space-x-3 p-3 rounded-lg bg-gray-50 dark:bg-gray-800/50 border border-gray-100 dark:border-gray-800">
+                <div className="p-2 rounded-full bg-primary-100 dark:bg-primary-900/30">
+                  <Clock className="w-5 h-5 text-primary-600 dark:text-primary-400" />
+                </div>
+                <div>
+                  <div className="text-sm font-semibold text-gray-900 dark:text-gray-100">{selectedMeeting.time}</div>
+                  <div className="text-xs text-gray-500 dark:text-gray-400">Duration: {selectedMeeting.duration}</div>
+                </div>
+              </div>
+
+              {selectedMeeting.location && (
+                <div className="flex items-start space-x-3 py-1">
+                  <MapPin className="w-4 h-4 text-gray-400 mt-0.5" />
+                  <span className="text-sm text-gray-700 dark:text-gray-300">{selectedMeeting.location}</span>
+                </div>
+              )}
+
+              {selectedMeeting.attendees && selectedMeeting.attendees.length > 0 && (
+                <div className="space-y-2">
+                  <label className="text-[10px] uppercase font-bold text-gray-500 dark:text-gray-400 flex items-center">
+                    <Users className="w-3 h-3 mr-1" />
+                    Attendees ({selectedMeeting.attendees.length})
+                  </label>
+                  <div className="flex flex-wrap gap-2">
+                    {selectedMeeting.attendees.map((a, i) => (
+                      <div key={i} className="px-2 py-1 rounded bg-gray-100 dark:bg-gray-800 text-xs text-gray-700 dark:text-gray-300 border border-gray-200 dark:border-gray-700">
+                        {a}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {selectedMeeting.description && (
+                <div className="space-y-1">
+                  <label className="text-[10px] uppercase font-bold text-gray-500 dark:text-gray-400">Notes</label>
+                  <FormattedAIResponse text={selectedMeeting.description} className="text-sm text-gray-600 dark:text-gray-400 bg-gray-50/50 dark:bg-gray-800/30 p-3 rounded-lg italic" />
+                </div>
+              )}
+
+              <div className="grid grid-cols-2 gap-3 pt-4 border-t border-gray-100 dark:border-gray-800">
+                <Button 
+                  variant="outline" 
+                  disabled={deletingMeeting}
+                  onClick={() => handleDeleteMeeting(selectedMeeting.id)}
+                  className="border-red-200 dark:border-red-900/50 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20"
+                >
+                  {deletingMeeting ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Trash2 className="w-4 h-4 mr-2" />}
+                  Delete
+                </Button>
+                {selectedMeeting.meet_link ? (
+                  <Button 
+                    onClick={() => window.open(selectedMeeting.meet_link, '_blank', 'noopener,noreferrer')}
+                    className="bg-blue-600 hover:bg-blue-700 text-white"
+                  >
+                    <Video className="w-4 h-4 mr-2" />
+                    Join Now
+                  </Button>
+                ) : (
+                  <Button disabled variant="secondary" className="opacity-50">
+                    No Link
+                  </Button>
+                )}
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };

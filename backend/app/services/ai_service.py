@@ -17,7 +17,7 @@ import httpx
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.core.models import Email, Meeting, Todo, HealthData
+from app.core.models import Email, Meeting, Todo, HealthData, Team
 
 logger = logging.getLogger(__name__)
 
@@ -71,22 +71,24 @@ def get_user_context(user_id: int, db: Session) -> dict:
         .count()
     )
 
-    # Today's meetings
+    # Upcoming meetings (next 7 days)
+    upcoming_end = today_start + timedelta(days=7)
     meetings = (
         db.query(Meeting)
         .filter(
             Meeting.user_id == user_id,
             Meeting.start_time >= today_start,
-            Meeting.start_time < today_end,
+            Meeting.start_time < upcoming_end,
         )
         .order_by(Meeting.start_time)
         .all()
     )
     # Filter out all-day events (like festivals) so they don't cause conflicts
-    meetings = [m for m in meetings if not _is_all_day_event(m.start_time, m.end_time)]
+    meetings = [m for m in meetings if not _is_all_day_event(m.start_time, m.end_time, m.title)]
     meetings_summary = [
         {
             "title": m.title or "(no title)",
+            "date": m.start_time.strftime("%Y-%m-%d") if m.start_time else "TBD",
             "start": m.start_time.strftime("%I:%M %p") if m.start_time else "TBD",
             "end": m.end_time.strftime("%I:%M %p") if m.end_time else "",
             "location": m.location or "",
@@ -129,13 +131,25 @@ def get_user_context(user_id: int, db: Session) -> dict:
             "readiness_score": score,
             "readiness_label": label,
         }
+    
+    # Teams
+    teams = db.query(Team).filter(Team.user_id == user_id).all()
+    teams_summary = []
+    for t in teams:
+        members = t.members if isinstance(t.members, list) else []
+        member_emails = [m.get('email', '') for m in members if isinstance(m, dict)]
+        teams_summary.append({
+            "name": t.name,
+            "emails": member_emails
+        })
 
     return {
         "current_time": now_local.isoformat(),
         "unread_emails": unread_count,
-        "meetings_today": meetings_summary,
+        "meetings_upcoming": meetings_summary,
         "pending_todos": todos_summary,
         "health": health_summary,
+        "teams": teams_summary
     }
 
 
@@ -149,13 +163,13 @@ def _format_context_block(context: dict) -> str:
     lines.append(f"Current System Offset Aware Date & Time: {context.get('current_time', 'Unknown')}")
     lines.append(f"Unread emails: {context['unread_emails']}")
 
-    if context["meetings_today"]:
-        lines.append("Today's meetings:")
-        for m in context["meetings_today"]:
+    if context["meetings_upcoming"]:
+        lines.append("Upcoming meetings (next 7 days):")
+        for m in context["meetings_upcoming"]:
             loc = f" @ {m['location']}" if m["location"] else ""
-            lines.append(f"  - {m['title']} ({m['start']}–{m['end']}{loc})")
+            lines.append(f"  - [{m['date']}] {m['title']} ({m['start']}–{m['end']}{loc})")
     else:
-        lines.append("No meetings scheduled for today.")
+        lines.append("No meetings scheduled for the next 7 days.")
 
     if context["pending_todos"]:
         lines.append("Pending to-dos:")
@@ -176,21 +190,38 @@ def _format_context_block(context: dict) -> str:
     else:
         lines.append("\nNo health/wearable data available.")
 
+    if context.get("teams"):
+        lines.append("\nYour Teams:")
+        for t in context["teams"]:
+            lines.append(f"  - {t['name']}: {', '.join(t['emails'])}")
+
     return "\n".join(lines)
 
 
-def build_chat_prompt(user_message: str, context: dict) -> str:
-    """Build a full prompt for general chat."""
+def build_chat_prompt(user_message: str, context: dict, history: List[Dict] = None) -> str:
+    """Build a full prompt for general chat with optional conversation history."""
     ctx_block = _format_context_block(context)
+
+    history_block = ""
+    if history:
+        history_lines = []
+        for msg in history:
+            role = "User" if msg['role'] == 'user' else "Assistant"
+            history_lines.append(f"{role}: {msg['content']}")
+        history_block = "\n=== Conversation History ===\n" + "\n".join(history_lines) + "\n"
+
     return (
         "You are a proactive, intelligent AI assistant embedded in a personal productivity dashboard. "
         "You have access to the user's real-time context shown below. Use it to give helpful, "
         "specific, and actionable answers. Be concise but thorough.\n\n"
         "IMPORTANT SCHEDULING RULE: If the user explicitly asks to schedule a new meeting, "
         "you MUST extract the details and output a JSON array block anywhere in your response EXACTLY like this:\n"
-        "[SCHEDULE_MEETING] {\"title\": \"...\", \"start_datetime\": \"YYYY-MM-DDTHH:MM:00+05:30\", \"end_datetime\": \"YYYY-MM-DDTHH:MM:00+05:30\", \"location\": \"...\", \"description\": \"...\"} [/SCHEDULE_MEETING]\n"
+        "[SCHEDULE_MEETING] {\"title\": \"...\", \"start_datetime\": \"YYYY-MM-DDTHH:MM:00+05:30\", \"end_datetime\": \"YYYY-MM-DDTHH:MM:00+05:30\", \"location\": \"...\", \"description\": \"...\", \"attendees\": [\"email1@ex.com\", \"...\"], \"create_meet_link\": true/false} [/SCHEDULE_MEETING]\n"
+        "TEAM LOOKUP: If the user explicitly mentions a team name (e.g., 'Marketing Team') from the context below, populate the `attendees` array with all member emails for that team. "
+        "Strict Rule: DO NOT automatically include entire teams if the user only provides an individual email or name. Only include teams when the team name is mentioned.\n\n"
         "Ensure dates are strictly converted to ISO 8601 format natively PRESERVING the exact localized offset provided in the System Date. DO NOT output 'Z' or convert to UTC. Output conversational text acknowledging the action outside these tags.\n\n"
-        f"=== User Context ===\n{ctx_block}\n=== End Context ===\n\n"
+        f"=== User Context ===\n{ctx_block}\n=== End Context ===\n"
+        f"{history_block}\n"
         f"User: {user_message}\n\n"
         "Assistant:"
     )
@@ -320,10 +351,10 @@ async def generate_llm_response(prompt: str) -> str:
 # High-level public helpers used by the API endpoints
 # ---------------------------------------------------------------------------
 
-async def generate_chat_response(user_message: str, user_id: int, db: Session) -> str:
-    """Generate an AI chat response with user context."""
+async def generate_chat_response(user_message: str, user_id: int, db: Session, history: List[Dict] = None) -> str:
+    """Generate an AI chat response with user context and conversation history."""
     context = get_user_context(user_id, db)
-    prompt = build_chat_prompt(user_message, context)
+    prompt = build_chat_prompt(user_message, context, history)
     return await generate_llm_response(prompt)
 
 
@@ -338,19 +369,69 @@ async def generate_email_reply(email_body: str, user_id: int, db: Session) -> st
     return response
 
 
+async def extract_meeting_info(text: str, current_time: str) -> Dict:
+    """
+    Extract meeting details (title, start, end, location) from unstructured text.
+    Returns a dict with extracted info.
+    """
+    prompt = (
+        "You are a precise data extractor. Extract meeting details from the text below. "
+        f"The current reference time is {current_time}. "
+        "Return ONLY a JSON object with these keys: title, start_time (ISO format), "
+        "end_time (ISO format), location, and notes. "
+        "If a field is missing, use null. If multiple people are mentioned, prioritize the meeting subject. "
+        "If the date is relative (e.g. 'tomorrow'), calculate it relative to the current time.\n\n"
+        f"Text: {text}\n\n"
+        "JSON:"
+    )
+    
+    response = await generate_llm_response(prompt)
+    
+    import json
+    import re
+    try:
+        # Try to find JSON block if the model added extra text
+        match = re.search(r'(\{.*\})', response, re.DOTALL)
+        if match:
+            return json.loads(match.group(1))
+        return json.loads(response)
+    except Exception:
+        logger.error("Failed to parse meeting extraction JSON: %s", response)
+        return {
+            "title": "Meeting from Email",
+            "start_time": None,
+            "end_time": None,
+            "location": None,
+            "notes": "Extracted from email sentiment."
+        }
+
+
 # ---------------------------------------------------------------------------
 # Proactive AI features
 # ---------------------------------------------------------------------------
 
-def _is_all_day_event(start_time, end_time) -> bool:
+def _is_all_day_event(start_time, end_time, title: str = "") -> bool:
     """Check if a meeting is an all-day/holiday event (not a real timed meeting)."""
     if not start_time or not end_time:
         return True
+    
+    # 1. Check title for keywords that usually indicate background events
+    t = (title or "").lower()
+    if any(kw in t for kw in ["festival", "holiday", "birthday", "day off", "anniversary"]):
+        return True
+
     # All-day events typically start at midnight and end at midnight next day
     s = start_time if start_time.tzinfo is None else start_time.replace(tzinfo=None)
     e = end_time if end_time.tzinfo is None else end_time.replace(tzinfo=None)
+    
+    # 2. Check for exact midnight bounds
     if s.hour == 0 and s.minute == 0 and e.hour == 0 and e.minute == 0:
         return True
+        
+    # 3. Check for very long duration (>= 12 hours) which usually aren't "meetings"
+    if (e - s).total_seconds() >= 12 * 3600:
+        return True
+        
     return False
 
 
@@ -380,7 +461,7 @@ def get_upcoming_meetings(user_id: int, db: Session, days: int = 7) -> List[Dict
             "attendees": m.attendees or "[]",
         }
         for m in meetings
-        if not _is_all_day_event(m.start_time, m.end_time)
+        if not _is_all_day_event(m.start_time, m.end_time, m.title)
     ]
 
 

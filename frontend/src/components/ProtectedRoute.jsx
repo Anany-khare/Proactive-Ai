@@ -17,13 +17,6 @@ const ProtectedRoute = ({ children }) => {
     return <Navigate to="/login" replace />;
   }
 
-  // If user is authenticated but profile is not complete, redirect to profile setup
-  // Check both user.profileComplete and localStorage
-  const profileComplete = user?.profileComplete || localStorage.getItem('profile_complete') === 'true';
-  if (user && !profileComplete && location.pathname !== '/profile-setup') {
-    return <Navigate to="/profile-setup" replace />;
-  }
-
   return children;
 };
 

@@ -39,46 +39,46 @@ def find_free_slots(
     duration_minutes: int = 60,
     days_ahead: int = 7,
     work_start_hour: int = 9,
-    work_end_hour: int = 18,
+    work_end_hour: int = 21,  # Extended work hours for flexibility
 ) -> List[Dict]:
     """
-    Scan the user's calendar and return available time slots.
-
-    Returns a list of dicts:
-      [{"start": iso_str, "end": iso_str, "duration_min": int}, ...]
+    Scan the user's calendar and return available time slots in IST.
     """
+    ist = timezone(timedelta(hours=5, minutes=30), name="IST")
+    now = datetime.now(ist)
     meetings = get_upcoming_meetings(user_id, db, days=days_ahead)
-    now = datetime.now(timezone.utc)
 
-    # Build a list of busy intervals
+    # Build a list of busy intervals, forced to IST
     busy: List[Tuple[datetime, datetime]] = []
     for m in meetings:
         try:
-            s = datetime.fromisoformat(m["start"])
-            e = datetime.fromisoformat(m["end"])
-            busy.append((s, e))
+            # Most strings will be ISO, we ensure they are treated as UTC then converted to IST
+            dt_s = datetime.fromisoformat(m["start"].replace('Z', '+00:00'))
+            dt_e = datetime.fromisoformat(m["end"].replace('Z', '+00:00'))
+            busy.append((dt_s.astimezone(ist), dt_e.astimezone(ist)))
         except (ValueError, TypeError):
             continue
     busy.sort(key=lambda x: x[0])
 
-    # Scan each working day for gaps
     free_slots: List[Dict] = []
     for day_offset in range(days_ahead):
-        day = (now + timedelta(days=day_offset)).replace(
+        day_date = (now + timedelta(days=day_offset)).date()
+        day_start = datetime.combine(day_date, datetime.min.time()).replace(tzinfo=ist).replace(
             hour=work_start_hour, minute=0, second=0, microsecond=0
         )
-        day_end = day.replace(hour=work_end_hour)
+        day_end = day_start.replace(hour=work_end_hour)
 
-        # Skip past days / current moment
+        # Skip if the entire work day is in the past
         if day_end < now:
             continue
-        cursor = max(day, now)
+            
+        cursor = max(day_start, now)
 
-        # Filter busy intervals for this day
+        # Filter busy intervals for this day (in IST)
         day_busy = [
-            (max(s, day), min(e, day_end))
+            (max(s, day_start), min(e, day_end))
             for s, e in busy
-            if s < day_end and e > day
+            if s < day_end and e > day_start
         ]
         day_busy.sort(key=lambda x: x[0])
 
@@ -87,6 +87,8 @@ def find_free_slots(
                 free_slots.append({
                     "start": cursor.isoformat(),
                     "end": bs.isoformat(),
+                    "display_start": cursor.strftime("%d %b, %I:%M %p IST"),
+                    "display_end": bs.strftime("%I:%M %p IST"),
                     "duration_min": int((bs - cursor).total_seconds() / 60),
                 })
             cursor = max(cursor, be)
@@ -96,6 +98,8 @@ def find_free_slots(
             free_slots.append({
                 "start": cursor.isoformat(),
                 "end": day_end.isoformat(),
+                "display_start": cursor.strftime("%d %b, %I:%M %p IST"),
+                "display_end": day_end.strftime("%I:%M %p IST"),
                 "duration_min": int((day_end - cursor).total_seconds() / 60),
             })
 
@@ -120,9 +124,17 @@ def _meeting_priority_score(meeting: Dict) -> int:
 
     title = (meeting.get("title") or "").lower()
     # High-priority keywords
-    for kw in ["standup", "sprint", "review", "1:1", "one-on-one", "interview", "board"]:
+    if "board" in title or "investor" in title or "urgent" in title:
+        score += 500  # Massive boost for critical meetings
+    
+    for kw in ["standup", "sprint", "review", "1:1", "one-on-one", "interview", "quarterly"]:
         if kw in title:
             score += 50
+
+    # Low-priority keywords
+    for kw in ["marketing", "internal", "sync", "catchup", "coffee", "chat", "newsletter"]:
+        if kw in title:
+            score -= 100 # Significant penalty for flexible meetings
     return score
 
 
@@ -133,6 +145,96 @@ def pick_meeting_to_move(conflict: Dict) -> Dict:
     if _meeting_priority_score(a) >= _meeting_priority_score(b):
         return b  # move B (lower priority)
     return a  # move A
+
+
+def generate_proactive_plan(user: User, meeting_info: Dict, db: Session) -> Dict:
+    """
+    Evaluate a proposed meeting info (extracted from email) against existing calendar.
+    Returns a 'Plan' dict:
+    {
+        "has_conflict": bool,
+        "conflict_with": str or None,
+        "decision": "accept" | "reschedule_existing" | "suggest_new_slot",
+        "priority_comparison": "higher" | "lower" | "equal",
+        "suggested_slot": str ISO or None
+    }
+    """
+    ist = timezone(timedelta(hours=5, minutes=30), name="IST")
+    
+    # Parse proposed times
+    try:
+        # Proposed start/end are extracted by LLM, might need padding/checks
+        s_str = meeting_info.get("start_time")
+        if not s_str: return {"has_conflict": False, "decision": "accept", "note": "No start time found"}
+        
+        prop_start = datetime.fromisoformat(s_str.replace('Z', '+00:00')).astimezone(ist)
+        
+        e_str = meeting_info.get("end_time")
+        if e_str:
+            prop_end = datetime.fromisoformat(e_str.replace('Z', '+00:00')).astimezone(ist)
+        else:
+            prop_end = prop_start + timedelta(hours=1)
+    except (ValueError, TypeError, KeyError):
+        return {"has_conflict": False, "decision": "accept", "note": "Invalid time format in proposal"}
+
+    # Find overlapping meetings
+    meetings = get_upcoming_meetings(user.id, db, days=2)  # Check next 48 hours for conflicts
+    conflicts = []
+    for m in meetings:
+        try:
+            m_s = datetime.fromisoformat(m["start"].replace('Z', '+00:00')).astimezone(ist)
+            m_e = datetime.fromisoformat(m["end"].replace('Z', '+00:00')).astimezone(ist)
+            if prop_start < m_e and m_s < prop_end:
+                conflicts.append(m)
+        except:
+            continue
+
+    if not conflicts:
+        return {
+            "has_conflict": False,
+            "decision": "accept",
+            "message": "Time slot is free. Ready to sync."
+        }
+
+    # Handle first conflict found
+    conflict = conflicts[0]
+    existing_priority = _meeting_priority_score(conflict)
+    
+    # Evaluate proposed meeting priority
+    proposed_priority = _meeting_priority_score({
+        "title": meeting_info.get("title", ""),
+        "attendees": meeting_info.get("attendees", [])
+    })
+
+    if proposed_priority > existing_priority:
+        # Proposed is more important -> suggestion is to move the old one
+        free_slots = find_free_slots(user.id, db, duration_minutes=60, days_ahead=3)
+        slot = free_slots[0] if free_slots else None
+        return {
+            "has_conflict": True,
+            "conflict_id": conflict["id"],
+            "conflict_with": conflict["title"],
+            "decision": "reschedule_existing",
+            "priority_comparison": "higher",
+            "message": f"Conflict with '{conflict['title']}', but this meeting is higher priority. I'll move '{conflict['title']}' to {slot['display_start'] if slot else 'a later slot'}.",
+            "suggested_slot": slot["start"] if slot else None
+        }
+    else:
+        # Proposed is less important -> find a new slot for the proposal
+        free_slots = find_free_slots(user.id, db, duration_minutes=60, days_ahead=3)
+        # Filter slots that don't overlap with the current conflict
+        better_slots = [s for s in free_slots if datetime.fromisoformat(s["start"]) >= prop_end or datetime.fromisoformat(s["end"]) <= prop_start]
+        slot = better_slots[0] if better_slots else (free_slots[0] if free_slots else None)
+        
+        return {
+            "has_conflict": True,
+            "conflict_id": conflict["id"],
+            "conflict_with": conflict["title"],
+            "decision": "suggest_new_slot",
+            "priority_comparison": "lower",
+            "message": f"Conflict with your existing '{conflict['title']}'. Since this is lower priority, I've found a better time for it at {slot['display_start'] if slot else 'TBD'}.",
+            "suggested_slot": slot["start"] if slot else None
+        }
 
 
 async def reschedule_meeting(
@@ -157,6 +259,7 @@ async def reschedule_meeting(
             event_id=meeting_to_move["id"],
             start_datetime=new_start,
             end_datetime=new_end,
+            send_updates='all'
         )
         if updated:
             # Update local DB record too
@@ -185,8 +288,55 @@ async def reschedule_meeting(
 
 
 # ---------------------------------------------------------------------------
-# Email notification for rescheduling
+# Email notification for rescheduling & cancellation
 # ---------------------------------------------------------------------------
+
+def send_cancellation_notification(
+    user: User,
+    meeting_title: str,
+    start_time_str: str,
+    attendees: List[str],
+    db: Session,
+) -> bool:
+    """
+    Send an email to all attendees informing them that a meeting was canceled.
+    """
+    credentials = get_google_credentials(user, db)
+    if not credentials:
+        logger.error("No credentials to send cancellation email")
+        return False
+
+    emails = [e for e in attendees if e and e != user.email]
+    if not emails:
+        return True
+
+    subject = f"Meeting Canceled: {meeting_title}"
+    body = (
+        f"Hi,\n\n"
+        f"This is an automated notification from {user.name or user.email}'s AI assistant.\n\n"
+        f"The meeting \"{meeting_title}\" originally scheduled for {start_time_str} has been canceled. "
+        f"The calendar event has been removed.\n\n"
+        f"Apologies for any inconvenience.\n\n"
+        f"Best regards,\n"
+        f"Proactive AI Assistant"
+    )
+
+    try:
+        import email as email_mod
+        import base64
+        gmail = GmailService(credentials)
+        msg = email_mod.message.EmailMessage()
+        msg["To"] = ", ".join(emails)
+        msg["From"] = user.email
+        msg["Subject"] = subject
+        msg.set_content(body)
+        raw = base64.urlsafe_b64encode(msg.as_bytes()).decode("utf-8")
+        gmail.service.users().messages().send(userId="me", body={"raw": raw}).execute()
+        return True
+    except Exception as exc:
+        logger.error("Failed to send cancellation email: %s", exc)
+        return False
+
 
 def send_reschedule_notification(
     user: User,
@@ -301,7 +451,14 @@ async def auto_resolve_conflicts(user: User, db: Session) -> List[Dict]:
             dur_min = 60
 
         # Find a free slot
-        free = find_free_slots(user.id, db, duration_minutes=dur_min, days_ahead=7)
+        free = find_free_slots(
+            user.id, 
+            db, 
+            duration_minutes=dur_min, 
+            days_ahead=7,
+            work_start_hour=user.work_start_hour or 9,
+            work_end_hour=user.work_end_hour or 18
+        )
         if not free:
             actions.append({
                 "conflict": conflict,
@@ -330,9 +487,8 @@ async def auto_resolve_conflicts(user: User, db: Session) -> List[Dict]:
             continue
 
         # Notify attendees
-        notified = send_reschedule_notification(
-            user, meeting_to_move, old_start, new_start, new_end, db
-        )
+        # Google standard update handles notification
+        notified = True 
 
         actions.append({
             "conflict": conflict,

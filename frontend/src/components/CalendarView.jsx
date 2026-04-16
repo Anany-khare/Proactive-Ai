@@ -6,6 +6,8 @@ import { ChevronLeft, ChevronRight, Plus, Calendar, Clock, MapPin, Users } from 
 import { Dialog, DialogTrigger, DialogContent, DialogHeader, DialogTitle } from './ui/dialog.jsx';
 import { Loader2 } from 'lucide-react';
 import { useQuery, keepPreviousData } from '@tanstack/react-query';
+import DatePicker from 'react-datepicker';
+import "react-datepicker/dist/react-datepicker.css";
 
 // Standalone helper (used in useMemo before component methods are defined)
 function getWeekStartStatic(date) {
@@ -20,11 +22,11 @@ const CalendarView = ({ view = 'week', onMeetingClick, onCreateMeeting, onViewCh
   const [showCreateDialog, setShowCreateDialog] = useState(false);
   const [newMeeting, setNewMeeting] = useState({
     title: '',
-    start_datetime: '',
-    end_datetime: '',
+    start_datetime: null,
+    end_datetime: null,
     location: '',
     description: '',
-    attendees: []
+    attendees: ''
   });
   const [isCreating, setIsCreating] = useState(false);
 
@@ -42,7 +44,7 @@ const CalendarView = ({ view = 'week', onMeetingClick, onCreateMeeting, onViewCh
     }
   }, [view, currentDate]);
 
-  const { data: events = [], isLoading: loading, error } = useQuery({
+  const { data: events = [], isLoading: loading, error, refetch } = useQuery({
     queryKey,
     queryFn: async () => {
       let response;
@@ -136,27 +138,23 @@ const CalendarView = ({ view = 'week', onMeetingClick, onCreateMeeting, onViewCh
         ? newMeeting.attendees.split(',').map(e => e.trim()).filter(e => e)
         : [];
 
-      const formatRFC3339 = (localStr) => {
-        return new Date(localStr).toISOString().split('.')[0] + 'Z';
-      };
-
       await meetingAPI.createMeeting({
         ...newMeeting,
-        start_datetime: formatRFC3339(newMeeting.start_datetime),
-        end_datetime: formatRFC3339(newMeeting.end_datetime),
+        start_datetime: newMeeting.start_datetime.toISOString(),
+        end_datetime: newMeeting.end_datetime.toISOString(),
         attendees
       });
 
       setShowCreateDialog(false);
       setNewMeeting({
         title: '',
-        start_datetime: '',
-        end_datetime: '',
+        start_datetime: null,
+        end_datetime: null,
         location: '',
         description: '',
-        attendees: []
+        attendees: ''
       });
-      fetchEvents();
+      refetch();
       if (onCreateMeeting) onCreateMeeting();
     } catch (err) {
       console.error('Error creating meeting:', err);
@@ -176,11 +174,6 @@ const CalendarView = ({ view = 'week', onMeetingClick, onCreateMeeting, onViewCh
       newDate.setDate(newDate.getDate() + (direction === 'next' ? 1 : -1));
     }
     setCurrentDate(newDate);
-  };
-
-  const getMinDateTime = () => {
-    const tzoffset = (new Date()).getTimezoneOffset() * 60000;
-    return (new Date(Date.now() - tzoffset)).toISOString().slice(0, 16);
   };
 
   const today = () => setCurrentDate(new Date());
@@ -254,24 +247,30 @@ const CalendarView = ({ view = 'week', onMeetingClick, onCreateMeeting, onViewCh
                       />
                     </div>
                     <div className="grid grid-cols-2 gap-5">
-                      <div>
-                        <label className="block text-sm font-semibold mb-1.5 text-gray-700 dark:text-gray-300">Start Date & Time <span className="text-red-500">*</span></label>
-                        <input
-                          type="datetime-local"
-                          min={getMinDateTime()}
-                          value={newMeeting.start_datetime}
-                          onChange={(e) => setNewMeeting({ ...newMeeting, start_datetime: e.target.value })}
-                          className="w-full px-4 py-3 text-sm border border-gray-200 dark:border-gray-700 rounded-xl bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-primary-500 focus:border-transparent outline-none transition-all shadow-sm [color-scheme:light] dark:[color-scheme:dark] cursor-pointer"
+                      <div className="bg-gray-50/50 dark:bg-gray-800/50 p-4 rounded-2xl border border-gray-100 dark:border-gray-700/50">
+                        <label className="block text-xs font-bold uppercase text-gray-400 mb-2">Start Date & Time <span className="text-red-500">*</span></label>
+                        <DatePicker
+                          selected={newMeeting.start_datetime}
+                          onChange={(date) => setNewMeeting({...newMeeting, start_datetime: date})}
+                          showTimeSelect
+                          timeIntervals={15}
+                          dateFormat="MMMM d, yyyy h:mm aa"
+                          minDate={new Date()}
+                          className="w-full px-0 bg-transparent border-none text-gray-900 dark:text-gray-100 font-semibold focus:ring-0 text-sm"
+                          placeholderText="Select start time"
                         />
                       </div>
-                      <div>
-                        <label className="block text-sm font-semibold mb-1.5 text-gray-700 dark:text-gray-300">End Date & Time <span className="text-red-500">*</span></label>
-                        <input
-                          type="datetime-local"
-                          min={newMeeting.start_datetime || getMinDateTime()}
-                          value={newMeeting.end_datetime}
-                          onChange={(e) => setNewMeeting({ ...newMeeting, end_datetime: e.target.value })}
-                          className="w-full px-4 py-3 text-sm border border-gray-200 dark:border-gray-700 rounded-xl bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-white focus:ring-2 focus:ring-primary-500 focus:border-transparent outline-none transition-all shadow-sm [color-scheme:light] dark:[color-scheme:dark] cursor-pointer"
+                      <div className="bg-gray-50/50 dark:bg-gray-800/50 p-4 rounded-2xl border border-gray-100 dark:border-gray-700/50">
+                        <label className="block text-xs font-bold uppercase text-gray-400 mb-2">End Date & Time <span className="text-red-500">*</span></label>
+                        <DatePicker
+                          selected={newMeeting.end_datetime}
+                          onChange={(date) => setNewMeeting({...newMeeting, end_datetime: date})}
+                          showTimeSelect
+                          timeIntervals={15}
+                          dateFormat="MMMM d, yyyy h:mm aa"
+                          minDate={newMeeting.start_datetime || new Date()}
+                          className="w-full px-0 bg-transparent border-none text-gray-900 dark:text-gray-100 font-semibold focus:ring-0 text-sm"
+                          placeholderText="Select end time"
                         />
                       </div>
                     </div>

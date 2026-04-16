@@ -113,7 +113,8 @@ def sync_user_data(user_id: int):
                     
                     start_time = parse_iso_datetime(meeting_data.get('start_datetime') or meeting_data.get('date'))
                     end_time = parse_iso_datetime(meeting_data.get('end_datetime'))
-                    
+                    meet_link = meeting_data.get('meet_link')
+
                     if not existing_meeting:
                         new_meeting = Meeting(
                             id=meeting_id,
@@ -123,7 +124,8 @@ def sync_user_data(user_id: int):
                             end_time=end_time,
                             location=meeting_data.get('location'),
                             description=meeting_data.get('description'),
-                            attendees=json.dumps(meeting_data.get('attendees', []))
+                            attendees=json.dumps(meeting_data.get('attendees', [])),
+                            meet_link=meet_link,
                         )
                         db.add(new_meeting)
                         updates_made = True
@@ -132,12 +134,23 @@ def sync_user_data(user_id: int):
                         existing_meeting.start_time = start_time
                         existing_meeting.end_time = end_time
                         existing_meeting.title = meeting_data.get('title')
+                        # Always refresh meet_link in case it changed
+                        existing_meeting.meet_link = meet_link
         
         except Exception as e:
             print(f"Error syncing calendar for user {user_id}: {e}")
         
         db.commit()
-        
+
+        # ── Phase 3: Process new emails for meeting requests ──────────────────
+        # Temporarily disabled as requested to stabilize server
+        # try:
+        #     from app.services.email_processor import process_new_emails_for_meetings
+        #     import asyncio
+        #     asyncio.run(process_new_emails_for_meetings(user.id, db))
+        # except Exception as e:
+        #     print(f"Email processor error for user {user_id}: {e}")
+
         # Update last_synced_at
         user.last_synced_at = datetime.now()
         db.commit()

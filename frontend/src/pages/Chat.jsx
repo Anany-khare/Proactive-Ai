@@ -3,12 +3,24 @@ import { Card, CardHeader, CardTitle, CardContent } from '../components/ui/card.
 import { Button } from '../components/ui/button.jsx';
 import { Send, Bot, User, Loader2, Trash2 } from 'lucide-react';
 import { aiAPI } from '../utils/api.jsx';
+import FormattedAIResponse from '../components/FormattedAIResponse.jsx';
 
 const ChatPage = () => {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [loadingStatus, setLoadingStatus] = useState('Thinking…');
   const [historyLoaded, setHistoryLoaded] = useState(false);
+  
+  const statusMessages = [
+    'Analyzing your request…',
+    'Fetching calendar context…',
+    'Checking for scheduling conflicts…',
+    'Resolving logistical details…',
+    'Processing your data…',
+    'Finalizing response…'
+  ];
+
   const messagesEndRef = useRef(null);
 
   const scrollToBottom = () => {
@@ -75,6 +87,16 @@ const ChatPage = () => {
     const currentInput = input;
     setInput('');
     setIsLoading(true);
+    setLoadingStatus(statusMessages[0]);
+
+    // Start status cycle
+    let statusIndex = 0;
+    const statusInterval = setInterval(() => {
+      statusIndex++;
+      if (statusIndex < statusMessages.length) {
+        setLoadingStatus(statusMessages[statusIndex]);
+      }
+    }, 2500);
 
     try {
       const res = await aiAPI.chat(currentInput);
@@ -97,6 +119,7 @@ const ChatPage = () => {
         },
       ]);
     } finally {
+      clearInterval(statusInterval);
       setIsLoading(false);
     }
   };
@@ -173,9 +196,7 @@ const ChatPage = () => {
                           : 'bg-gray-100 dark:bg-gray-800 text-gray-900 dark:text-gray-100 rounded-bl-none'
                       }`}
                     >
-                      <p className="text-sm leading-relaxed whitespace-pre-wrap">
-                        {m.content}
-                      </p>
+                      <FormattedAIResponse text={m.content} />
                     </div>
                     <p className="text-xs text-gray-500 dark:text-gray-400 mt-1 px-1">
                       {m.timestamp instanceof Date
@@ -199,7 +220,7 @@ const ChatPage = () => {
                 <div className="inline-block px-4 py-3 rounded-lg bg-gray-100 dark:bg-gray-800 rounded-bl-none">
                   <div className="flex items-center space-x-2 text-sm text-gray-500 dark:text-gray-400">
                     <Loader2 size={14} className="animate-spin" />
-                    <span>Thinking…</span>
+                    <span>{loadingStatus}</span>
                   </div>
                 </div>
               </div>

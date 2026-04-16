@@ -1,7 +1,7 @@
 import re
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Optional, List, Dict, Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -24,6 +24,12 @@ from app.services.ai_service import (
     get_user_context,
     _format_context_block,
     generate_llm_response,
+    extract_meeting_info,
+)
+from app.services.proactive_service import (
+    find_free_slots,
+    generate_proactive_plan,
+    reschedule_meeting,
 )
 
 logger = logging.getLogger(__name__)
@@ -51,6 +57,10 @@ class GenerateReplyResponse(BaseModel):
     reply_text: str
 
 
+class ExtractMeetingRequest(BaseModel):
+    text: str
+
+
 class InsightsResponse(BaseModel):
     insights: str
     conflicts: List[Dict[str, Any]] = []
@@ -69,6 +79,12 @@ class EmailSummaryResponse(BaseModel):
     summary: str
 
 
+class LogActionRequest(BaseModel):
+    id: str  # message_id or thread_id
+    summary: str
+    action_type: str = "proactive_action"
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
@@ -82,6 +98,7 @@ async def chat(
     """
     General-purpose AI chat. Saves messages to DB for persistence.
     """
+
     # Save user message
     user_msg = ChatMessage(
         user_id=current_user.id,
@@ -91,11 +108,21 @@ async def chat(
     db.add(user_msg)
     db.commit()
 
-    # Generate AI response
+    # Fetch last 10 messages for context
+    history_objs = db.query(ChatMessage).filter(
+        ChatMessage.user_id == current_user.id
+    ).order_by(ChatMessage.created_at.desc()).limit(10).all()
+
+    # Reverse to get chronological order for the prompt
+    history_objs.reverse()
+    history = [{"role": h.role, "content": h.content} for h in history_objs]
+
+    # Generate AI response with history context
     raw_reply = await generate_chat_response(
         user_message=request.message,
         user_id=current_user.id,
         db=db,
+        history=history,
     )
 
     clean_reply = raw_reply
@@ -125,6 +152,8 @@ async def chat(
                 title = payload.get('title', 'Meeting Auto-Scheduled via AI')
                 location = payload.get('location', '')
                 description = payload.get('description', '')
+                attendees = payload.get('attendees', [])
+                create_meet_link = payload.get('create_meet_link', False)
 
                 # -------------------------------------------------------------
                 # PROACTIVE SCHEDULING INTERVENTION
@@ -134,40 +163,64 @@ async def chat(
                 proactive_note = ""
                 try:
                     if start_dt and end_dt:
-                        s_obj = datetime.fromisoformat(start_dt.replace('Z', '+00:00'))
-                        e_obj = datetime.fromisoformat(end_dt.replace('Z', '+00:00'))
+                        # Clean Z from ISO if present
+                        s_iso = start_dt.replace('Z', '+00:00')
+                        e_iso = end_dt.replace('Z', '+00:00')
+                        s_obj = datetime.fromisoformat(s_iso)
+                        e_obj = datetime.fromisoformat(e_iso)
                         duration = e_obj - s_obj
                         original_tz = s_obj.tzinfo
                         
-                        while True:
+                        # Get user's working hours
+                        w_start = current_user.work_start_hour or 9
+                        w_end = current_user.work_end_hour or 18
+
+                        from app.services.ai_service import _is_all_day_event
+
+                        # Iteratively find a gap within working hours
+                        days_searched = 0
+                        while days_searched < 14:  # Safety limit: look up to 14 days ahead
+                            # 1. Check if the current window is within working hours
+                            # Note: we compare strictly the hour of the local/offset time
+                            if s_obj.hour < w_start or s_obj.hour >= w_end or e_obj.hour > w_end or (e_obj.hour == w_end and e_obj.minute > 0):
+                                # Push to start of next working day
+                                s_obj = (s_obj + timedelta(days=1)).replace(hour=w_start, minute=0, second=0, microsecond=0)
+                                e_obj = s_obj + duration
+                                was_rescheduled = True
+                                continue
+
+                            # 2. Check for conflicts with existing REAL meetings (exclude all-day festivals)
                             conflict = db.query(Meeting).filter(
                                 Meeting.user_id == current_user.id,
                                 Meeting.start_time < e_obj,
                                 Meeting.end_time > s_obj
-                            ).order_by(Meeting.end_time).first()
+                            ).order_by(Meeting.start_time).all()
                             
-                            if not conflict:
-                                break  # Free slot found natively!
-                                
-                            # Push meeting iteratively
-                            if conflict.end_time:
-                                # Safe re-attachment of local TZ if SQLite stripped it into naive numbers
-                                if conflict.end_time.tzinfo is None:
-                                    s_obj = conflict.end_time.replace(tzinfo=original_tz)
-                                else:
-                                    s_obj = conflict.end_time.astimezone(original_tz)
-                                    
-                                e_obj = s_obj + duration
-                                was_rescheduled = True
+                            # Filter out holidays/festivals/all-day events from being considered "conflicts"
+                            real_conflicts = [c for c in conflict if not _is_all_day_event(c.start_time, c.end_time, c.title)]
+
+                            if not real_conflicts:
+                                break  # We found a valid slot!
+                            
+                            # 3. If there is a real conflict, push past it
+                            latest_end = max([c.end_time for c in real_conflicts])
+                            if latest_end.tzinfo is None:
+                                s_obj = latest_end.replace(tzinfo=original_tz)
                             else:
-                                break # Safety escape
+                                s_obj = latest_end.astimezone(original_tz)
+                                
+                            e_obj = s_obj + duration
+                            was_rescheduled = True
                             
+                            # If pushing it took us to a new day or late hour, the loop will catch it in step 1
+                            days_searched += 1
+
                         if was_rescheduled:
                             start_dt = s_obj.isoformat()
                             end_dt = e_obj.isoformat()
-                            proactive_note = f"\n\n[Proactive Action Taken: Logistical conflict detected. I autonomously re-routed this meeting to begin immediately after your prior commitments end at {s_obj.strftime('%I:%M %p')} instead]"
-                except ValueError:
-                    pass
+                            proactive_note = f"\n\n[Proactive Action Taken: Logistical conflict detected. I autonomously re-routed this meeting to a free slot within your working hours at {s_obj.strftime('%I:%M %p')} on {s_obj.strftime('%b %d')}]"
+                except Exception as loop_err:
+                    logger.error(f"Error in proactive reschedule loop: {loop_err}")
 
                 event = calendar_service.create_event(
                     title=title,
@@ -175,7 +228,8 @@ async def chat(
                     end_datetime=end_dt,
                     location=location,
                     description=description,
-                    attendees=[] # Optional AI Attendees enhancement could go here 
+                    attendees=attendees,
+                    create_meet_link=create_meet_link
                 )
                 
                 if event:
@@ -348,12 +402,43 @@ async def get_free_slots(
     Find available time slots in the user's calendar.
     """
     from app.services.proactive_service import find_free_slots
-    slots = find_free_slots(current_user.id, db, duration_minutes=duration, days_ahead=days)
+    slots = find_free_slots(
+        current_user.id, 
+        db, 
+        duration_minutes=duration, 
+        days_ahead=days,
+        work_start_hour=current_user.work_start_hour or 9,
+        work_end_hour=current_user.work_end_hour or 18
+    )
     return {"slots": slots, "total": len(slots)}
 
 
 class SmartReplyRequest(BaseModel):
     email_id: str
+
+
+@router.post("/log-action")
+async def log_proactive_action(
+    request: LogActionRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Log a summary of a proactive action (like syncing a meeting) to notifications.
+    """
+    try:
+        notification = Notification(
+            user_id=current_user.id,
+            type=request.action_type,
+            message=request.summary,
+            related_id=None
+        )
+        db.add(notification)
+        db.commit()
+        return {"status": "success"}
+    except Exception as e:
+        logger.error(f"Failed to log proactive action: {e}")
+        raise HTTPException(status_code=500, detail="Failed to log action")
 
 
 @router.post("/smart-reply")
@@ -375,7 +460,24 @@ async def smart_reply(
     if not email:
         raise HTTPException(status_code=404, detail="Email not found")
 
-    email_text = f"Subject: {email.subject or ''}\nFrom: {email.sender or ''}\n\n{email.body or email.preview or ''}"
+    # Stability: Truncate body if extremely long to avoid LLM timeouts/crashes
+    body_text = email.body or email.preview or ""
+    if len(body_text) > 8000:
+        body_text = body_text[:8000] + "... [truncated]"
+
+    # 1. Check if we already have a background AI insight cached
+    if email.ai_insight:
+        logger.info(f"Using cached AI insight for email {request.email_id}")
+        return {
+            "is_meeting": email.ai_insight.get("meeting_info", {}).get("is_meeting", False),
+            "meeting_info": email.ai_insight.get("meeting_info"),
+            "proactive_plan": email.ai_insight.get("proactive_plan"),
+            "reply_text": "[Native RSVP available in Gmail]", # User prefers Gmail UI
+            "gmail_link": f"https://mail.google.com/mail/u/0/#all/{email.id}"
+        }
+
+    # Fallback to live extraction if insight is missing (e.g. for old emails)
+    email_text = f"Subject: {email.subject or ''}\nFrom: {email.sender or ''}\n\n{body_text}"
 
     # Detect if meeting invite
     meeting_keywords = ['invite', 'meeting', 'calendar', 'agenda', 'scheduled', 'join', 'rsvp', 'conference']
@@ -383,39 +485,132 @@ async def smart_reply(
     is_meeting = any(kw in text_lower for kw in meeting_keywords)
 
     if is_meeting:
-        # Check availability for the next 7 days
-        from app.services.proactive_service import find_free_slots
-        free_slots = find_free_slots(current_user.id, db, duration_minutes=60, days_ahead=7)
+        # Extract structured details using IST as reference
+        ist = timezone(timedelta(hours=5, minutes=30))
+        now_str = datetime.now(ist).strftime("%Y-%m-%d %H:%M:%S")
+        extracted_info = await extract_meeting_info(email_text, now_str)
 
-        context = get_user_context(current_user.id, db)
-        slot_block = ""
-        if free_slots:
-            slot_lines = [f"  - {s['start']} to {s['end']}" for s in free_slots[:5]]
-            slot_block = "\nYour available time slots:\n" + "\n".join(slot_lines)
+        # Update priority logic or planning on the fly
+        from app.services.proactive_service import generate_proactive_plan
+        plan = await generate_proactive_plan(current_user.id, extracted_info, db)
 
-        prompt = (
-            "You are an AI email assistant. The user received a meeting invite email. "
-            "Draft a polite, professional reply. If the user is free at the proposed time, accept. "
-            "If not, suggest alternative times from the available slots below.\n\n"
-            f"=== Email ===\n{email_text}\n=== End Email ===\n\n"
-            f"=== User Context ===\n{_format_context_block(context)}\n"
-            f"{slot_block}\n=== End Context ===\n\n"
-            "Important: Prefix your reply with '[AI Auto-Reply] ' to indicate this is automated.\n"
-            "Reply:"
-        )
-        reply = await generate_llm_response(prompt)
+        # Save to cache for future use
+        email.ai_insight = {
+            "meeting_info": extracted_info,
+            "proactive_plan": plan
+        }
+        db.commit()
+
         return {
-            "reply_text": reply,
             "is_meeting": True,
-            "meeting_detected": True,
-            "free_slots": free_slots[:5] if free_slots else [],
+            "meeting_info": extracted_info,
+            "proactive_plan": plan,
+            "reply_text": "[Native RSVP available in Gmail]",
+            "gmail_link": f"https://mail.google.com/mail/u/0/#all/{email.id}"
         }
-    else:
-        # Normal email - generate contextual reply
-        reply = await generate_email_reply(email_text, current_user.id, db)
-        reply = f"[AI Auto-Reply] {reply}"
-        return {
-            "reply_text": reply,
-            "is_meeting": False,
-            "meeting_detected": False,
-        }
+
+    # For non-meeting emails, just return a basic reply if needed
+    context = get_user_context(current_user.id, db)
+    prompt = (
+        "Draft a short, professional response to this email: "
+        f"{email_text}\n"
+        "User context: " + str(context)
+    )
+    reply = await generate_llm_response(prompt)
+    return {
+        "is_meeting": False,
+        "reply_text": reply,
+        "gmail_link": f"https://mail.google.com/mail/u/0/#all/{email.id}"
+    }
+
+
+
+class ProactiveExecuteRequest(BaseModel):
+    email_id: str
+    meeting_info: Dict[str, Any]
+    plan: Dict[str, Any]
+
+
+@router.post("/execute-proactive-sync")
+async def execute_proactive_sync(
+    request: ProactiveExecuteRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """
+    Execute the proactive plan:
+    - If decision is 'accept': Just create the meeting.
+    - If decision is 'reschedule_existing': Move conflict, then create meeting.
+    - If decision is 'suggest_new_slot': Create meeting at the new slot.
+    """
+    plan = request.plan
+    info = request.meeting_info
+    credentials = get_google_credentials(current_user, db)
+    if not credentials:
+        raise HTTPException(status_code=400, detail="Google account not connected")
+
+    cal = CalendarService(credentials)
+    summary = []
+
+    # 1. Handle Rescheduling of Existing Meeting
+    if plan.get("decision") == "reschedule_existing" and plan.get("conflict_id"):
+        from app.services.proactive_service import pick_meeting_to_move, send_reschedule_notification
+        conflict_id = plan["conflict_id"]
+        new_slot = plan.get("suggested_slot")
+        
+        if new_slot:
+            # Get existing meeting details
+            meeting_to_move = db.query(Meeting).filter(Meeting.id == conflict_id).first()
+            if meeting_to_move:
+                old_time = meeting_to_move.start_time.strftime("%I:%M %p")
+                # Perform rescheduling
+                # Calculate end time based on original duration
+                dur = meeting_to_move.end_time - meeting_to_move.start_time
+                new_start_dt = datetime.fromisoformat(new_slot.replace('Z', '+00:00'))
+                new_end_dt = new_start_dt + dur
+                
+                res = await reschedule_meeting(current_user, {"id": conflict_id, "title": meeting_to_move.title}, new_start_dt.isoformat(), new_end_dt.isoformat(), db)
+                if res:
+                    summary.append(f"Moved '{meeting_to_move.title}' to {new_start_dt.strftime('%I:%M %p')}")
+
+    # 2. Determine time for the NEW meeting
+    final_start = info["start_time"]
+    final_end = info.get("end_time") or (datetime.fromisoformat(final_start.replace('Z', '+00:00')) + timedelta(hours=1)).isoformat()
+
+    if plan.get("decision") == "suggest_new_slot" and plan.get("suggested_slot"):
+        final_start = plan["suggested_slot"]
+        final_end = (datetime.fromisoformat(final_start.replace('Z', '+00:00')) + timedelta(hours=1)).isoformat()
+        summary.append(f"Scheduled at better slot: {datetime.fromisoformat(final_start.replace('Z', '+00:00')).strftime('%I:%M %p')}")
+
+    # 3. Create the event
+    event = cal.create_event(
+        title=info.get("title", "Email Meeting"),
+        start_datetime=final_start,
+        end_datetime=final_end,
+        location=info.get("location", ""),
+        description=info.get("notes", ""),
+        attendees=[], # Manual sync usually starts with reply to organizer
+        create_meet_link=True
+    )
+
+    if event:
+        # Sync to DB
+        db_meeting = Meeting(
+            user_id=current_user.id,
+            id=event.get('id'),
+            title=event.get('title'),
+            start_time=datetime.fromisoformat(final_start.replace('Z', '+00:00')),
+            end_time=datetime.fromisoformat(final_end.replace('Z', '+00:00')),
+            location=event.get('location'),
+            description=event.get('description'),
+            attendees=[]
+        )
+        db.add(db_meeting)
+        db.commit()
+        summary.append(f"Meeting '{event.get('title')}' added to calendar.")
+
+    return {
+        "success": True,
+        "summary": " | ".join(summary),
+        "event_id": event.get('id') if event else None
+    }

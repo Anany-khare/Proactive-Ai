@@ -157,7 +157,20 @@ export const AuthProvider = ({ children }) => {
     isLoading,
     googleAuth,
     logout,
-    completeProfile
+    completeProfile,
+    updateAutoPilot: async (enabled) => {
+      try {
+        const response = await authAPI.updateProfile({ auto_pilot_enabled: enabled });
+        if (response.data.status === 'updated') {
+          setUser(prev => ({ ...prev, auto_pilot_enabled: enabled }));
+          return true;
+        }
+        return false;
+      } catch (err) {
+        console.error('Failed to update auto-pilot:', err);
+        return false;
+      }
+    }
   };
 
   return (

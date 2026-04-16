@@ -1,6 +1,6 @@
-from pydantic import BaseModel, EmailStr
-from typing import Optional, List
+from typing import Optional, List, Dict, Any, Union
 from datetime import datetime
+from pydantic import BaseModel, EmailStr
 
 # User Schemas
 class UserBase(BaseModel):
@@ -25,16 +25,20 @@ class Token(BaseModel):
 
 # Email Schemas
 class EmailResponse(BaseModel):
-    id: str  # Changed to str to match Gmail message IDs
-    from_email: str  # Use from_email as the field name
-    subject: str
-    preview: str
+    id: str
+    from_email: str
+    subject: Optional[str] = ""
+    preview: Optional[str] = ""
     priority: str = "medium"
     unread: bool = True
+    received_at: Optional[datetime] = None
     timestamp: str
-    time: str = None
+    time: Optional[str] = None
+    gmail_url: Optional[str] = None
+    ai_insight: Optional[Dict[str, Any]] = None
     thread_id: Optional[str] = None
-    
+    snippet: Optional[str] = ""
+
     class Config:
         from_attributes = True
 
@@ -48,6 +52,10 @@ class EmailDetailResponse(BaseModel):
     date: str
     unread: bool
     snippet: Optional[str] = ""
+    gmail_url: Optional[str] = None
+
+    class Config:
+        from_attributes = True
 
 class EmailReplyRequest(BaseModel):
     message_id: str
@@ -55,8 +63,8 @@ class EmailReplyRequest(BaseModel):
 
 class EmailForwardRequest(BaseModel):
     message_id: str
-    to_emails: List[str]
-    forward_text: str = ""
+    forward_to: str
+    comment: Optional[str] = None
 
 class EmailMarkReadRequest(BaseModel):
     message_id: str
@@ -64,38 +72,30 @@ class EmailMarkReadRequest(BaseModel):
 
 class EmailThreadResponse(BaseModel):
     thread_id: str
-    messages: List[EmailDetailResponse]
+    emails: List[EmailDetailResponse]
 
 class EmailListResponse(BaseModel):
-    items: List[EmailResponse]
+    emails: Optional[List[EmailResponse]] = None
+    items: Optional[List[EmailResponse]] = None
+    total: int = 0
     next_page_token: Optional[str] = None
 
 # Meeting Schemas
 class MeetingBase(BaseModel):
     title: str
-    time: str
-    duration: str
-    location: str
-    attendees: List[str]
-
-class MeetingResponse(MeetingBase):
-    id: str  # Changed to str to match Google Calendar event IDs
-    upcoming: bool = True
-    date: Optional[str] = None
-    start_datetime: Optional[str] = None
-    end_datetime: Optional[str] = None
+    start_time: datetime
+    end_time: datetime
+    location: Optional[str] = None
     description: Optional[str] = None
     meet_link: Optional[str] = None
-    
-    class Config:
-        from_attributes = True
+    attendees: Optional[str] = None  # JSON string
 
 class MeetingCreate(BaseModel):
     title: str
     start_datetime: str
     end_datetime: str
-    location: str = ""
-    description: str = ""
+    location: Optional[str] = None
+    description: Optional[str] = None
     attendees: List[str] = []
 
 class MeetingUpdate(BaseModel):
@@ -105,6 +105,34 @@ class MeetingUpdate(BaseModel):
     location: Optional[str] = None
     description: Optional[str] = None
     attendees: Optional[List[str]] = None
+
+class MeetingResponse(BaseModel):
+    id: Optional[Union[int, str]] = None
+    title: str
+    time: str
+    duration: str
+    location: str
+    attendees: List[str]
+    upcoming: bool
+    date: Optional[str] = None
+    start_datetime: Optional[str] = None
+    end_datetime: Optional[str] = None
+    description: Optional[str] = None
+    meet_link: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+# New/Restored Schemas for Dashboard
+class Suggestion(BaseModel):
+    id: int
+    type: str
+    message: str
+    action: str
+
+class DailyBrief(BaseModel):
+    greeting: str
+    summary: str
 
 # Todo Schemas
 class TodoBase(BaseModel):
@@ -142,59 +170,66 @@ class NotificationResponse(NotificationBase):
     class Config:
         from_attributes = True
 
-class NotificationUpdate(BaseModel):
-    read: bool
-
-# Dashboard Schemas
-class DailyBrief(BaseModel):
-    summary: str
-    date: str
-
-class Suggestion(BaseModel):
-    id: int
-    type: str
-    message: str
-    action: str
-
-class DashboardData(BaseModel):
-    dailyBrief: Optional[DailyBrief] = None
-    emails: List[EmailResponse] = []
-    meetings: List[MeetingResponse] = []
-    todos: List[TodoResponse] = []
-    notifications: List[NotificationResponse] = []
-    suggestions: List[Suggestion] = []
-
 # Health Schemas
 class HealthDataResponse(BaseModel):
     date: str
     sleep_minutes: Optional[int] = None
     sleep_score: Optional[int] = None
     steps: Optional[int] = 0
+    readiness_score: Optional[int] = None
+    readiness_label: Optional[str] = None
+    source: Optional[str] = None
     resting_heart_rate: Optional[int] = None
     calories_burned: Optional[int] = None
     active_minutes: Optional[int] = None
-    source: str = "fitbit"
-    # Computed fields for the frontend
-    sleep_hours: Optional[float] = None
-    readiness_score: Optional[int] = None
-    readiness_label: Optional[str] = None
 
-    class Config:
-        from_attributes = True
-
-# Agentic Action Schemas
+# Action Schemas
 class RescheduleRequest(BaseModel):
     event_id: str
-    new_start: str  # ISO datetime
-    new_end: str    # ISO datetime
-    reason: Optional[str] = None
+    new_start: str
+    new_end: str
 
 class DraftEmailRequest(BaseModel):
-    email_id: str  # The email to reply to
-    tone: Optional[str] = "professional"  # professional, casual, urgent
+    email_id: str
+    tone: str = "professional"
 
 class ActionResponse(BaseModel):
     success: bool
     message: str
-    data: Optional[dict] = None
+    data: Optional[Dict[str, Any]] = None
 
+# Dashboard Schema
+class DashboardData(BaseModel):
+    dailyBrief: DailyBrief
+    emails: List[EmailResponse]
+    meetings: List[MeetingResponse]
+    todos: List[TodoResponse]
+    notifications: List[NotificationResponse]
+    suggestions: List[Suggestion]
+    health: Optional[HealthDataResponse] = None
+    ai_insight: Optional[str] = None
+
+class ChatMessage(BaseModel):
+    role: str
+    content: str
+
+class ChatRequest(BaseModel):
+    message: str
+    history: List[ChatMessage] = []
+
+class ChatResponse(BaseModel):
+    response: str
+    suggested_actions: List[dict] = []
+
+class TeamMemberResponse(BaseModel):
+    id: int
+    name: str
+    email: EmailStr
+    role: str
+    status: str = "Available"
+
+    class Config:
+        from_attributes = True
+
+class TeamResponse(BaseModel):
+    members: List[TeamMemberResponse]

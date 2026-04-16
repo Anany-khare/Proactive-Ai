@@ -83,7 +83,8 @@ async def get_email(
             body=cached_email.body,
             date=cached_email.received_at.isoformat() if cached_email.received_at else "",
             unread=False, # Now it's read
-            snippet=cached_email.preview or ""
+            snippet=cached_email.preview or "",
+            gmail_url=cached_email.gmail_url
         )
     
     # Was redundant code block here - removed as it is now above.

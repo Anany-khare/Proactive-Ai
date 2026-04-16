@@ -686,7 +686,8 @@ class CalendarService:
         }
     
     def create_event(self, title: str, start_datetime: str, end_datetime: str, 
-                     location: str = '', description: str = '', attendees: List[str] = None) -> Optional[Dict]:
+                     location: str = '', description: str = '', attendees: List[str] = None,
+                     create_meet_link: bool = False) -> Optional[Dict]:
         """Create a new calendar event"""
         try:
             event = {
@@ -708,11 +709,24 @@ class CalendarService:
             if attendees:
                 event['attendees'] = [{'email': email} for email in attendees]
             
+            # Add Google Meet generation if requested
+            conference_data = None
+            if create_meet_link:
+                import uuid
+                event['conferenceData'] = {
+                    'createRequest': {
+                        'requestId': str(uuid.uuid4()),
+                        'conferenceSolutionKey': {'type': 'hangoutsMeet'}
+                    }
+                }
+            
             created_event = self.service.events().insert(
                 calendarId='primary',
-                body=event
+                body=event,
+                sendUpdates='all',
+                conferenceDataVersion=1 if create_meet_link else 0
             ).execute()
-            
+
             return self._format_event(created_event)
         except HttpError as error:
             print(f'Error creating event: {error}')
@@ -720,7 +734,8 @@ class CalendarService:
     
     def update_event(self, event_id: str, title: str = None, start_datetime: str = None, 
                      end_datetime: str = None, location: str = None, 
-                     description: str = None, attendees: List[str] = None) -> Optional[Dict]:
+                     description: str = None, attendees: List[str] = None,
+                     send_updates: str = 'all') -> Optional[Dict]:
         """Update an existing calendar event"""
         try:
             # Get existing event
@@ -752,7 +767,8 @@ class CalendarService:
             updated_event = self.service.events().update(
                 calendarId='primary',
                 eventId=event_id,
-                body=event
+                body=event,
+                sendUpdates=send_updates
             ).execute()
             
             return self._format_event(updated_event)

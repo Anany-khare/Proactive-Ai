@@ -220,7 +220,15 @@ async def get_user_profile(
             "name": current_user.name,
             "picture": current_user.picture,
             "created_at": current_user.created_at.isoformat() if current_user.created_at else None,
-            "updated_at": current_user.updated_at.isoformat() if current_user.updated_at else None
+            "updated_at": current_user.updated_at.isoformat() if current_user.updated_at else None,
+            # Working hours & leave
+            "work_start_hour": current_user.work_start_hour or 9,
+            "work_end_hour": current_user.work_end_hour or 18,
+            "weekends_enabled": current_user.weekends_enabled or False,
+            "on_leave": current_user.on_leave or False,
+            "leave_start_date": current_user.leave_start_date,
+            "leave_end_date": current_user.leave_end_date,
+            "leave_return_date": current_user.leave_return_date,
         },
         "stats": {
             "todos_total": todos_count,
@@ -242,6 +250,14 @@ from typing import Optional
 
 class ProfileUpdateRequest(BaseModel):
     name: Optional[str] = None
+    work_start_hour: Optional[int] = None
+    work_end_hour: Optional[int] = None
+    weekends_enabled: Optional[bool] = None
+    on_leave: Optional[bool] = None
+    leave_start_date: Optional[str] = None
+    leave_end_date: Optional[str] = None
+    leave_return_date: Optional[str] = None  # YYYY-MM-DD or empty string to clear
+    auto_pilot_enabled: Optional[bool] = None
 
 
 @router.patch("/profile")
@@ -250,9 +266,25 @@ async def update_user_profile(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Update the user's profile. Email is immutable (Google OAuth identifier)."""
+    """Update the user's profile, working hours, and leave status."""
     if request.name is not None:
         current_user.name = request.name.strip()
+    if request.work_start_hour is not None:
+        current_user.work_start_hour = request.work_start_hour
+    if request.work_end_hour is not None:
+        current_user.work_end_hour = request.work_end_hour
+    if request.weekends_enabled is not None:
+        current_user.weekends_enabled = request.weekends_enabled
+    if request.on_leave is not None:
+        current_user.on_leave = request.on_leave
+    if request.leave_start_date is not None:
+        current_user.leave_start_date = request.leave_start_date
+    if request.leave_end_date is not None:
+        current_user.leave_end_date = request.leave_end_date
+    if request.leave_return_date is not None:
+        current_user.leave_return_date = request.leave_return_date or None
+    if request.auto_pilot_enabled is not None:
+        current_user.auto_pilot_enabled = request.auto_pilot_enabled
     db.commit()
     db.refresh(current_user)
     return {
@@ -262,5 +294,13 @@ async def update_user_profile(
             "email": current_user.email,
             "name": current_user.name,
             "picture": current_user.picture,
+            "work_start_hour": current_user.work_start_hour or 9,
+            "work_end_hour": current_user.work_end_hour or 18,
+            "weekends_enabled": current_user.weekends_enabled or False,
+            "on_leave": current_user.on_leave or False,
+            "leave_start_date": current_user.leave_start_date,
+            "leave_end_date": current_user.leave_end_date,
+            "leave_return_date": current_user.leave_return_date,
+            "auto_pilot_enabled": current_user.auto_pilot_enabled,
         },
     }

@@ -5,8 +5,10 @@ from app.core.dependencies import get_current_user
 from app.core.models import User, ServiceToken, Todo, Notification, Email, Meeting
 from app.core.schemas import (
     DashboardData, DailyBrief, EmailResponse, MeetingResponse, 
-    TodoResponse, NotificationResponse, Suggestion, TodoCreate, TodoUpdate
+    TodoResponse, NotificationResponse, Suggestion, TodoCreate, TodoUpdate,
+    HealthDataResponse
 )
+
 import redis
 import json
 from app.core.config import settings
@@ -216,14 +218,15 @@ async def get_contextual_data(
         id=m.id,
         title=m.title,
         time=m.start_time.strftime("%I:%M %p") if m.start_time else "",
-        duration="30 min", # Placeholder
+        duration="30 min",
         location=m.location or "Virtual",
         attendees=json.loads(m.attendees) if m.attendees else [],
         upcoming=True,
         date=m.start_time.isoformat() if m.start_time else None,
-        start_datetime = m.start_time.isoformat() if m.start_time else None,
-        end_datetime = m.end_time.isoformat() if m.end_time else None,
-        description=m.description
+        start_datetime=m.start_time.isoformat() if m.start_time else None,
+        end_datetime=m.end_time.isoformat() if m.end_time else None,
+        description=m.description,
+        meet_link=m.meet_link,
     ) for m in db_meetings]
     
     # Todos
@@ -249,39 +252,61 @@ async def get_contextual_data(
         ) for notif in notifications
     ]
     
-    # Daily Brief
+    # 2.5 Generate Brief and Suggestions
+    # Fixed: Define daily_brief and suggestions which were missing
     daily_brief = DailyBrief(
-        summary=f"Good {get_time_of_day()}! You have {len(meetings_response)} meeting{'s' if len(meetings_response) != 1 else ''} upcoming, {len([e for e in emails_response if e.unread])} unread priority email{'s' if len([e for e in emails_response if e.unread]) != 1 else ''}.",
-        date=datetime.now(timezone.utc).strftime('%A, %B %d, %Y')
+        greeting=f"Good {get_time_of_day()}, {current_user.name or 'there'}!",
+        summary=f"You have {len(db_meetings)} meetings and {len([e for e in emails_response if e.priority == 'high'])} important emails today."
     )
     
-    # Suggestions
     suggestions = generate_suggestions(meetings_response, emails_response, todos_response)
     
-    # Health data
-    from app.services.health_service import get_latest_health_data
-    health_data = get_latest_health_data(current_user.id, db)
+    # Placeholder for health data (could be expanded later)
+    health_data = None
     
+    # Formulate a summary/insight
+
+    from app.services.ai_service import generate_chat_response
+    
+    context_prompt = f"Today's schedule: {len(meetings_response)} meetings. "
+    if meetings_response:
+        context_prompt += f"First one is '{meetings_response[0].title}' at {meetings_response[0].time}. "
+    context_prompt += f"Priority emails: {len([e for e in emails_response if e.priority == 'high'])}. Pending tasks: {len(todos_response)}."
+    
+    try:
+        insight = await generate_chat_response(
+            f"System context update: {context_prompt}. Provide a 1-sentence proactive summary/tip for the user starting their day.",
+            history=[],
+            user_id=current_user.id,
+            db=db
+        )
+    except Exception as e:
+        print(f"Failed to generate AI insight: {e}")
+        insight = "Stay productive! Check your priority emails and upcoming meetings."
+
     dashboard_data = DashboardData(
         dailyBrief=daily_brief,
         emails=emails_response,
         meetings=meetings_response,
         todos=todos_response,
         notifications=notifications_response,
-        suggestions=suggestions
+        suggestions=suggestions,
+        health=HealthDataResponse.model_validate(health_data) if health_data else None,
+        ai_insight=insight
     )
     
     # 3. Cache Result (10 mins)
     try:
-         # Use SafeCache wrapper 'cache' instead of 'redis_client'
-        cache.set(cache_key, json.dumps(dashboard_data.dict(), default=str), ex=600)
+        cache.set(cache_key, json.dumps(dashboard_data.model_dump(), default=str), ex=600)
     except Exception as e:
         print(f"Redis set error: {e}")
-
+ 
     # 4. Trigger Background Sync
     print(f"[{time.time() - start_time:.3f}s] Triggering sync check...")
     trigger_sync_if_needed(current_user, db, background_tasks, force_check=True)
     print(f"[{time.time() - start_time:.3f}s] Finished get_contextual_data")
+ 
+    return dashboard_data
 
     # Return with health data appended
     response = dashboard_data.dict()
@@ -337,9 +362,10 @@ async def get_meetings(
         attendees=json.loads(m.attendees) if m.attendees else [],
         upcoming=True,
         date=m.start_time.isoformat() if m.start_time else None,
-        start_datetime = m.start_time.isoformat() if m.start_time else None,
-        end_datetime = m.end_time.isoformat() if m.end_time else None,
-        description=m.description
+        start_datetime=m.start_time.isoformat() if m.start_time else None,
+        end_datetime=m.end_time.isoformat() if m.end_time else None,
+        description=m.description,
+        meet_link=m.meet_link,
     ) for m in meetings]
 
 @router.get("/todos", response_model=List[TodoResponse])

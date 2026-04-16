@@ -183,7 +183,7 @@ async def delete_meeting(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Delete a meeting"""
+    """Delete a meeting and notify attendees"""
     credentials = get_google_credentials(current_user, db)
     if not credentials:
         raise HTTPException(
@@ -192,21 +192,40 @@ async def delete_meeting(
         )
     
     try:
-        calendar_service = CalendarService(credentials)
-        success = calendar_service.delete_event(event_id)
+        from app.core.models import Meeting
+        from app.services.proactive_service import send_cancellation_notification
         
+        # 1. Fetch details before deletion (for notification)
+        calendar_service = CalendarService(credentials)
+        event = calendar_service.get_event_by_id(event_id)
+        
+        # 2. Delete from Google Calendar
+        success = calendar_service.delete_event(event_id)
         if not success:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to delete meeting"
+                detail="Failed to delete meeting from Google Calendar"
             )
         
-        # Create notification
+        # 3. Sync local DB: delete if exists
+        db.query(Meeting).filter(Meeting.id == event_id).delete()
+        
+        # 4. Notify attendees via email
+        if event and event.get('attendees'):
+            send_cancellation_notification(
+                user=current_user,
+                meeting_title=event.get('title', 'Meeting'),
+                start_time_str=event.get('time', 'specified time'),
+                attendees=event.get('attendees', []),
+                db=db
+            )
+        
+        # 5. Create dashboard notification
         try:
             notification = Notification(
                 user_id=current_user.id,
                 type='meeting',
-                message="Meeting deleted",
+                message=f"Meeting '{event.get('title', 'Deleted')}' canceled and attendees notified",
                 related_id=None
             )
             db.add(notification)
@@ -221,6 +240,78 @@ async def delete_meeting(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error deleting meeting: {str(e)}"
+        )
+
+@router.post("/{event_id}/reschedule-manual", response_model=MeetingResponse)
+async def reschedule_manual(
+    event_id: str,
+    meeting_data: MeetingUpdate, # Reusing MeetingUpdate for start/end times
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Manually reschedule a meeting and notify attendees"""
+    credentials = get_google_credentials(current_user, db)
+    if not credentials:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Google account not connected"
+        )
+    
+    if not meeting_data.start_datetime or not meeting_data.end_datetime:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="New start and end times are required for rescheduling"
+        )
+
+    try:
+        from app.core.models import Meeting
+        from app.services.proactive_service import send_reschedule_notification
+        
+        # 1. Fetch old details
+        calendar_service = CalendarService(credentials)
+        old_event = calendar_service.get_event_by_id(event_id)
+        if not old_event:
+            raise HTTPException(status_code=404, detail="Meeting not found")
+
+        old_start = old_event.get('start_datetime')
+        new_start = _sanitize_rfc3339(meeting_data.start_datetime)
+        new_end = _sanitize_rfc3339(meeting_data.end_datetime)
+
+        # 2. Update Google Calendar
+        updated = calendar_service.update_event(
+            event_id=event_id,
+            start_datetime=new_start,
+            end_datetime=new_end,
+        )
+        if not updated:
+            raise HTTPException(status_code=500, detail="Failed to update Google Calendar")
+
+        # 3. Sync local DB
+        local = db.query(Meeting).filter(Meeting.id == event_id).first()
+        if local:
+            local.start_time = datetime.fromisoformat(new_start.replace('Z', '+00:00'))
+            local.end_time = datetime.fromisoformat(new_end.replace('Z', '+00:00'))
+            db.commit()
+
+        # 4. Notify attendees
+        send_reschedule_notification(
+            user=current_user,
+            meeting=old_event,
+            old_start=old_start,
+            new_start=new_start,
+            new_end=new_end,
+            db=db
+        )
+
+        return MeetingResponse(**updated)
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error rescheduling meeting: {str(e)}"
         )
 
 @router.get("/range/events", response_model=List[MeetingResponse])

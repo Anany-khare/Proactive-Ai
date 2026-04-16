@@ -300,18 +300,28 @@ const Emails = () => {
                       {email.time}
                     </p>
                   </div>
-                  <div className="ml-4">
+                  <div className="ml-4 flex flex-col items-end space-y-2">
                     <EmailActions
                       email={email}
                       onUpdate={handleUpdate}
                       onDelete={() => handleDelete(email.id)}
                     />
+                    {email.gmail_url && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => window.open(email.gmail_url, '_blank')}
+                        className="text-gray-500 hover:text-primary-600 border-gray-200 dark:border-gray-700 h-8"
+                        title="Open in Gmail"
+                      >
+                        <ExternalLink className="h-4 w-4" />
+                      </Button>
+                    )}
                     {email.thread_id && (
                       <Button
                         variant="ghost"
                         size="sm"
                         onClick={() => handleEmailClick(email.id, email.thread_id)}
-                        className="mt-2"
                         title="View thread"
                       >
                         <MessageSquare className="h-4 w-4" />
