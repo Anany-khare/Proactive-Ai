@@ -50,13 +50,13 @@ const EmailThread = ({ threadId, onBack }) => {
     }
   };
 
-  const handleAnalyzeEmail = async (id) => {
+  const handleAnalyzeEmail = async (id, shouldShowConfirm = false) => {
     if (!id) return;
     setSmartLoading(true);
     try {
       const res = await aiAPI.smartReply(id);
       setSmartAction(res.data);
-      if (pendingShowConfirm) {
+      if (pendingShowConfirm || shouldShowConfirm) {
         setShowConfirmAdd(true);
         setPendingShowConfirm(false);
       }
@@ -67,7 +67,9 @@ const EmailThread = ({ threadId, onBack }) => {
     }
   };
 
-  const handleConfirmAdd = async () => {
+  const [rsvpStatus, setRsvpStatus] = useState('yes');
+
+  const handleConfirmAdd = async (rsvp = 'yes') => {
     if (!smartAction?.meeting_info || !selectedMessage) return;
     setAddingMeeting(true);
     setAddSuccess(false);
@@ -76,41 +78,88 @@ const EmailThread = ({ threadId, onBack }) => {
       setStatusMessage("Reading meeting details...");
       await new Promise(r => setTimeout(r, 600)); 
       
-      setStatusMessage("Checking calendar conflicts...");
-      await new Promise(r => setTimeout(r, 800));
+      let eventId = smartAction.auto_added_event_id;
+      let nativeRsvpHandled = false;
+      
+      if (rsvp === 'no') {
+        if (smartAction.auto_added_event_id) {
+          setStatusMessage("Removing from Google Calendar...");
+          try {
+            await meetingAPI.deleteMeeting(smartAction.auto_added_event_id);
+          } catch (e) {
+            console.error("Failed to remove auto-added event:", e);
+          }
+        }
+      } else {
+        setStatusMessage("Checking calendar conflicts...");
+        await new Promise(r => setTimeout(r, 800));
 
-      setStatusMessage("Adding to Google Calendar...");
-      const info = smartAction.meeting_info;
-      await meetingAPI.createMeeting({
-        title: info.title || 'Meeting from Email',
-        description: info.notes || `Extracted from thread: ${selectedMessage.subject}`,
-        start_datetime: info.start_time,
-        end_datetime: info.end_time || info.start_time,
-        location: info.location || '',
-        attendees: [],
-      });
+        setStatusMessage("Executing proactive sync...");
+        const info = smartAction.meeting_info;
+        const plan = smartAction.proactive_plan;
+        
+        const syncRes = await aiAPI.executeProactiveSync(selectedMessage.id, info, plan, smartAction.auto_added_event_id);
 
-      setStatusMessage("Sending auto-reply to organizer...");
-      if (smartAction.reply_text) {
-        await emailAPI.replyToEmail(selectedMessage.id, smartAction.reply_text);
+        if (!syncRes.data.success) {
+          throw new Error(syncRes.data.message || "Sync failed");
+        }
+        if (syncRes.data.event_id) {
+          eventId = syncRes.data.event_id;
+        }
+        if (syncRes.data.native_rsvp) {
+          nativeRsvpHandled = true;
+        }
       }
+
+      let replyMessage = smartAction.reply_text;
+      if (!nativeRsvpHandled) {
+        setStatusMessage("Sending auto-reply to organizer...");
+        if (rsvp === 'no') {
+            replyMessage = "Thank you for the invitation, but I won't be able to make it to this meeting as I have a meeting with others.";
+        } else if (rsvp === 'maybe') {
+            replyMessage = "Thanks for the invite. I've added it to my calendar, but my attendance is tentative right now. " + (smartAction.reply_text || "");
+        } else if (rsvp === 'yes') {
+            replyMessage = "I have accepted the meeting invitation and added it to my calendar. See you then!";
+        }
+        
+        if (replyMessage) {
+          await emailAPI.replyToEmail(selectedMessage.id, replyMessage);
+        }
+      } else {
+          setStatusMessage("RSVP sent via Calendar...");
+          replyMessage = "[Accepted via Google Calendar]";
+      }
+      
+      setStatusMessage("Updating AI insight...");
+      await aiAPI.updateInsight(selectedMessage.id, rsvp, replyMessage, eventId);
 
       setStatusMessage("Saving proactive summary...");
       await aiAPI.logProactiveAction({
         id: selectedMessage.id,
-        summary: `Synced meeting "${info.title || 'Meeting'}" for ${info.start_time} (IST) and automatically replied to organizer.`
+        summary: rsvp === 'no' 
+          ? `Declined meeting "${smartAction.meeting_info.title || 'Meeting'}" and replied.` 
+          : nativeRsvpHandled 
+            ? `Accepted invitation for "${smartAction.meeting_info.title || 'Meeting'}" via Google Calendar.`
+            : `Synced meeting "${smartAction.meeting_info.title || 'Meeting'}" (${rsvp.toUpperCase()}) and replied.`
       });
 
       await new Promise(r => setTimeout(r, 500));
       
       setAddSuccess(true);
-      setStatusMessage("Added to calendar and sent reply!");
+      setStatusMessage(rsvp === 'no' ? "Declined and sent reply!" : nativeRsvpHandled ? "Accepted via Calendar!" : "Added to calendar and sent reply!");
       
       setTimeout(() => {
         setShowConfirmAdd(false);
         setAddSuccess(false);
         setStatusMessage("");
-        setSmartAction(prev => ({ ...prev, meeting_added: true }));
+        setSmartAction(prev => ({ 
+           ...prev, 
+           meeting_added: rsvp !== 'no',
+           rsvp_status: rsvp,
+           reply_text: replyMessage,
+           auto_added_event_id: eventId
+        }));
+        handleUpdate(); // Refetch the thread so the sent email appears
       }, 3000);
     } catch (err) {
       console.error('Failed to complete proactive action:', err);
@@ -121,22 +170,7 @@ const EmailThread = ({ threadId, onBack }) => {
     }
   };
 
-  // Auto-Pilot Logic
-  useEffect(() => {
-    let timer;
-    if (user?.auto_pilot_enabled && smartAction?.meeting_info && !smartAction?.meeting_added && !addingMeeting && autoCountdown === null) {
-      setAutoCountdown(2); // 2 second safety buffer
-    }
-
-    if (autoCountdown !== null && autoCountdown > 0) {
-      timer = setTimeout(() => setAutoCountdown(autoCountdown - 1), 1000);
-    } else if (autoCountdown === 0) {
-      setAutoCountdown(null);
-      handleConfirmAdd();
-    }
-
-    return () => clearTimeout(timer);
-  }, [user?.auto_pilot_enabled, smartAction, autoCountdown, addingMeeting]);
+  // Removed old Auto-Pilot logic as the backend handles it now.
 
   useEffect(() => {
     if (selectedMessage) {
@@ -252,21 +286,34 @@ const EmailThread = ({ threadId, onBack }) => {
                       <Button 
                         variant="outline" 
                         size="sm" 
-                        disabled={smartLoading || addingMeeting}
+                        disabled={smartLoading || addingMeeting || !!smartAction?.rsvp_status}
                         onClick={() => {
                           if (smartAction?.meeting_info) {
                             setShowConfirmAdd(true);
                           } else {
-                            setPendingShowConfirm(true);
-                            handleAnalyzeEmail(selectedMessage.id);
+                            handleAnalyzeEmail(selectedMessage.id, true);
                           }
                         }}
-                        className="text-violet-600 border-violet-200 hover:bg-violet-50 dark:border-violet-800 dark:hover:bg-violet-900/20"
+                        className={`border-violet-200 dark:border-violet-800 ${
+                          smartAction?.rsvp_status === 'yes' ? 'bg-green-50 text-green-600 dark:bg-green-900/20 dark:text-green-400' :
+                          smartAction?.rsvp_status === 'no' ? 'bg-red-50 text-red-600 dark:bg-red-900/20 dark:text-red-400' :
+                          'text-violet-600 hover:bg-violet-50 dark:hover:bg-violet-900/20'
+                        }`}
                       >
                         {smartLoading ? (
                           <>
                             <Loader2 className="w-4 h-4 mr-2 animate-spin" />
                             Scanning...
+                          </>
+                        ) : smartAction?.rsvp_status ? (
+                          <>
+                            <CheckCircle className="w-4 h-4 mr-2" />
+                            {smartAction.rsvp_status === 'yes' ? 'Accepted' : smartAction.rsvp_status === 'no' ? 'Declined' : 'Tentative'}
+                          </>
+                        ) : smartAction?.meeting_added ? (
+                          <>
+                            <CalendarPlus className="w-4 h-4 mr-2" />
+                            Review RSVP
                           </>
                         ) : (
                           <>
@@ -315,21 +362,35 @@ const EmailThread = ({ threadId, onBack }) => {
                     <div className="p-4">
                       <div className="flex items-center justify-between">
                         <div className="flex items-center space-x-3">
-                          <Brain className={`w-5 h-5 ${smartAction?.meeting_detected ? 'text-violet-600' : 'text-gray-400'}`} />
+                          <Brain className={`w-5 h-5 ${smartAction?.is_meeting ? 'text-violet-600' : 'text-gray-400'}`} />
                           <div>
                             <p className="text-xs font-bold text-gray-900 dark:text-gray-100">AI Assistant</p>
-                            <p className="text-[10px] text-gray-500">{smartLoading ? 'Analyzing...' : smartAction?.meeting_detected ? 'Meeting detected' : 'Scan complete'}</p>
+                            <p className="text-[10px] text-gray-500">{smartLoading ? 'Analyzing...' : smartAction?.is_meeting ? 'Meeting detected' : 'Scan complete'}</p>
                           </div>
                         </div>
-                        {smartAction?.meeting_added && (
-                          <div className="text-green-600 text-[10px] font-bold">Added to Calendar</div>
-                        )}
+                        {smartAction?.rsvp_status ? (
+                          <div className={`text-[10px] font-bold px-3 py-1 rounded-full ${
+                            smartAction.rsvp_status === 'yes' ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' :
+                            smartAction.rsvp_status === 'no' ? 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400' :
+                            'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-400'
+                          }`}>
+                            RSVP: {smartAction.rsvp_status.toUpperCase()}
+                          </div>
+                        ) : smartAction?.meeting_added ? (
+                          <div 
+                            className="text-green-600 text-[10px] font-bold cursor-pointer hover:underline"
+                            onClick={() => setShowConfirmAdd(true)}
+                          >
+                            Auto-Added. Click to RSVP
+                          </div>
+                        ) : null}
                       </div>
-                      {smartAction?.reply_text && (
-                        <div className="mt-3 p-2 bg-white/50 dark:bg-black/20 rounded border border-indigo-100/50">
-                           <FormattedAIResponse text={smartAction.reply_text} className="text-xs" />
-                        </div>
-                      )}
+                        {smartAction?.reply_text && (
+                          <div className="mt-3 p-2 bg-white/50 dark:bg-black/20 rounded border border-indigo-100/50">
+                             <p className="text-[10px] font-bold text-gray-400 mb-1 uppercase">{smartAction.rsvp_status ? 'Sent Reply' : 'AI Drafted Reply'}</p>
+                             <FormattedAIResponse text={smartAction.is_meeting ? "I have accepted the meeting invitation and added it to my calendar. See you then!" : smartAction.reply_text} className="text-xs" />
+                          </div>
+                        )}
                     </div>
                   </div>
                 )}
@@ -388,7 +449,7 @@ const EmailThread = ({ threadId, onBack }) => {
             </div>
           )}
 
-          <DialogFooter className="border-t border-gray-100 dark:border-gray-800 pt-4 px-0">
+          <DialogFooter className="border-t border-gray-100 dark:border-gray-800 pt-4 px-0 flex flex-col space-y-4">
             {addingMeeting ? (
               <div className="w-full space-y-3 px-6 pb-2">
                 <div className="flex items-center justify-center space-x-3 text-violet-600 font-medium">
@@ -408,11 +469,18 @@ const EmailThread = ({ threadId, onBack }) => {
                 <p className="text-[10px] text-gray-400 font-normal">Your calendar is synced and organizer notified.</p>
               </div>
             ) : (
-              <div className="flex w-full space-x-3 px-6">
-                <Button variant="ghost" className="flex-1" onClick={() => setShowConfirmAdd(false)}>Cancel</Button>
-                <Button className="flex-1 bg-violet-600 hover:bg-violet-700 text-white" onClick={handleConfirmAdd}>
-                  Confirm & Sync
-                </Button>
+              <div className="w-full">
+                <div className="flex justify-center space-x-4 mb-4 px-6 w-full">
+                  <Button variant={rsvpStatus === 'yes' ? 'default' : 'outline'} className={rsvpStatus === 'yes' ? 'bg-green-600 hover:bg-green-700 text-white' : ''} onClick={() => setRsvpStatus('yes')}>Yes</Button>
+                  <Button variant={rsvpStatus === 'maybe' ? 'default' : 'outline'} className={rsvpStatus === 'maybe' ? 'bg-yellow-600 hover:bg-yellow-700 text-white' : ''} onClick={() => setRsvpStatus('maybe')}>Maybe</Button>
+                  <Button variant={rsvpStatus === 'no' ? 'default' : 'outline'} className={rsvpStatus === 'no' ? 'bg-red-600 hover:bg-red-700 text-white' : ''} onClick={() => setRsvpStatus('no')}>No</Button>
+                </div>
+                <div className="flex w-full space-x-3 px-6">
+                  <Button variant="ghost" className="flex-1" onClick={() => setShowConfirmAdd(false)}>Cancel</Button>
+                  <Button className="flex-1 bg-violet-600 hover:bg-violet-700 text-white" onClick={() => handleConfirmAdd(rsvpStatus)}>
+                    {rsvpStatus === 'no' ? 'Send Decline' : 'Confirm & Sync'}
+                  </Button>
+                </div>
               </div>
             )}
           </DialogFooter>

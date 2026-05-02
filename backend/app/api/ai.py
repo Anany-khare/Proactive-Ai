@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.dependencies import get_current_user
-from app.core.models import User, ChatMessage, Meeting, Email
+from app.core.models import User, ChatMessage, Meeting, Email, Notification
 from app.core.google_services import CalendarService
 from app.api.dashboard import get_google_credentials
 from app.api.meetings import _sanitize_rfc3339
@@ -416,6 +416,37 @@ async def get_free_slots(
 class SmartReplyRequest(BaseModel):
     email_id: str
 
+class UpdateInsightRequest(BaseModel):
+    email_id: str
+    rsvp_status: str
+    reply_text: str
+    event_id: Optional[str] = None
+
+@router.post("/update-insight")
+async def update_insight(
+    request: UpdateInsightRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Update the cached AI insight with the user's RSVP status.
+    """
+    try:
+        from app.core.models import Email
+        email = db.query(Email).filter(Email.id == request.email_id).first()
+        if email and email.ai_insight:
+            insight = dict(email.ai_insight)
+            insight["rsvp_status"] = request.rsvp_status
+            insight["reply_text"] = request.reply_text
+            if request.event_id:
+                insight["auto_added_event_id"] = request.event_id
+            email.ai_insight = insight
+            db.commit()
+        return {"status": "success"}
+    except Exception as e:
+        logger.error(f"Failed to update insight: {e}")
+        return {"status": "error", "message": str(e)}
+
 
 @router.post("/log-action")
 async def log_proactive_action(
@@ -465,14 +496,19 @@ async def smart_reply(
     if len(body_text) > 8000:
         body_text = body_text[:8000] + "... [truncated]"
 
-    # 1. Check if we already have a background AI insight cached
     if email.ai_insight:
         logger.info(f"Using cached AI insight for email {request.email_id}")
+        reply_text = email.ai_insight.get("reply_text")
+        if not reply_text or reply_text == "[Native RSVP available in Gmail]":
+             reply_text = "Thank you for the meeting invitation. I have received it and will review my calendar."
         return {
-            "is_meeting": email.ai_insight.get("meeting_info", {}).get("is_meeting", False),
+            "is_meeting": email.ai_insight.get("meeting_info", {}).get("is_meeting", True),
             "meeting_info": email.ai_insight.get("meeting_info"),
             "proactive_plan": email.ai_insight.get("proactive_plan"),
-            "reply_text": "[Native RSVP available in Gmail]", # User prefers Gmail UI
+            "reply_text": reply_text,
+            "auto_added_event_id": email.ai_insight.get("auto_added_event_id"),
+            "meeting_added": True if email.ai_insight.get("auto_added_event_id") else False,
+            "rsvp_status": email.ai_insight.get("rsvp_status"),
             "gmail_link": f"https://mail.google.com/mail/u/0/#all/{email.id}"
         }
 
@@ -492,12 +528,74 @@ async def smart_reply(
 
         # Update priority logic or planning on the fly
         from app.services.proactive_service import generate_proactive_plan
-        plan = await generate_proactive_plan(current_user.id, extracted_info, db)
+        plan = await generate_proactive_plan(current_user, extracted_info, db)
+
+        # Generate a professional reply for the meeting
+        context = get_user_context(current_user.id, db)
+        prompt = (
+            "Draft a short, professional response to this meeting invitation email: "
+            f"{email_text}\n"
+            "Acknowledge the meeting. If there are conflicts, mention we will figure it out.\n"
+            "User context: " + str(context)
+        )
+        reply = "I have accepted the meeting invitation and added it to my calendar. See you then!"
+
+        # AUTO-ADD LOGIC IN BACKEND:
+        from app.core.google_services import CalendarService
+        from app.api.dashboard import get_google_credentials
+        from app.core.models import Meeting
+        
+        credentials = get_google_credentials(current_user, db)
+        event_id = None
+        if credentials and extracted_info.get("start_time"):
+            try:
+                cal = CalendarService(credentials)
+                
+                def _format_ai_datetime(dt_str):
+                    if not dt_str: return dt_str
+                    # Replace space with T
+                    dt_str = dt_str.replace(" ", "T")
+                    # Append seconds if missing
+                    if len(dt_str) == 16:
+                        dt_str += ":00"
+                    # If it's completely naive, assume IST
+                    if not dt_str.endswith("Z") and "+" not in dt_str and "-" not in dt_str[10:]:
+                        dt_str += "+05:30"
+                    return dt_str
+
+                final_start = _format_ai_datetime(extracted_info.get("start_time"))
+                final_end = _format_ai_datetime(extracted_info.get("end_time")) or final_start
+
+                event = cal.create_event(
+                    title=extracted_info.get("title", "Meeting from Email"),
+                    start_datetime=final_start,
+                    end_datetime=final_end,
+                    location=extracted_info.get("location", ""),
+                    description="[Auto-added by AI]\n" + extracted_info.get("notes", ""),
+                    attendees=[]
+                )
+                if event:
+                    event_id = event.get('id')
+                    db_meeting = Meeting(
+                        user_id=current_user.id,
+                        id=event_id,
+                        title=event.get('title'),
+                        start_time=datetime.fromisoformat(final_start.replace('Z', '+00:00')),
+                        end_time=datetime.fromisoformat(final_end.replace('Z', '+00:00')),
+                        location=event.get('location'),
+                        description=event.get('description'),
+                        attendees=[]
+                    )
+                    db.add(db_meeting)
+            except Exception as e:
+                logger.error(f"Failed to auto-add meeting to calendar: {e}")
 
         # Save to cache for future use
         email.ai_insight = {
             "meeting_info": extracted_info,
-            "proactive_plan": plan
+            "proactive_plan": plan,
+            "reply_text": reply,
+            "auto_added_event_id": event_id
         }
         db.commit()
 
@@ -505,7 +603,9 @@ async def smart_reply(
             "is_meeting": True,
             "meeting_info": extracted_info,
             "proactive_plan": plan,
-            "reply_text": "[Native RSVP available in Gmail]",
+            "reply_text": reply,
+            "auto_added_event_id": event_id,
+            "meeting_added": True if event_id else False,
             "gmail_link": f"https://mail.google.com/mail/u/0/#all/{email.id}"
         }
 
@@ -528,7 +628,8 @@ async def smart_reply(
 class ProactiveExecuteRequest(BaseModel):
     email_id: str
     meeting_info: Dict[str, Any]
-    plan: Dict[str, Any]
+    plan: Optional[Dict[str, Any]] = None
+    auto_added_event_id: Optional[str] = None
 
 
 @router.post("/execute-proactive-sync")
@@ -543,7 +644,7 @@ async def execute_proactive_sync(
     - If decision is 'reschedule_existing': Move conflict, then create meeting.
     - If decision is 'suggest_new_slot': Create meeting at the new slot.
     """
-    plan = request.plan
+    plan = request.plan or {}
     info = request.meeting_info
     credentials = get_google_credentials(current_user, db)
     if not credentials:
@@ -574,43 +675,93 @@ async def execute_proactive_sync(
                     summary.append(f"Moved '{meeting_to_move.title}' to {new_start_dt.strftime('%I:%M %p')}")
 
     # 2. Determine time for the NEW meeting
-    final_start = info["start_time"]
-    final_end = info.get("end_time") or (datetime.fromisoformat(final_start.replace('Z', '+00:00')) + timedelta(hours=1)).isoformat()
+    def _format_ai_datetime(dt_str):
+        if not dt_str: return dt_str
+        dt_str = dt_str.replace(" ", "T")
+        if len(dt_str) == 16: dt_str += ":00"
+        if not dt_str.endswith("Z") and "+" not in dt_str and "-" not in dt_str[10:]:
+            dt_str += "+05:30"
+        return dt_str
+
+    final_start = _format_ai_datetime(info["start_time"])
+    final_end = _format_ai_datetime(info.get("end_time")) or (datetime.fromisoformat(final_start.replace('Z', '+00:00')) + timedelta(hours=1)).isoformat()
 
     if plan.get("decision") == "suggest_new_slot" and plan.get("suggested_slot"):
-        final_start = plan["suggested_slot"]
+        final_start = _format_ai_datetime(plan["suggested_slot"])
         final_end = (datetime.fromisoformat(final_start.replace('Z', '+00:00')) + timedelta(hours=1)).isoformat()
         summary.append(f"Scheduled at better slot: {datetime.fromisoformat(final_start.replace('Z', '+00:00')).strftime('%I:%M %p')}")
 
-    # 3. Create the event
-    event = cal.create_event(
-        title=info.get("title", "Email Meeting"),
-        start_datetime=final_start,
-        end_datetime=final_end,
-        location=info.get("location", ""),
-        description=info.get("notes", ""),
-        attendees=[], # Manual sync usually starts with reply to organizer
-        create_meet_link=True
-    )
+    # 3. Create or Update the event
+    auto_added_event_id = request.auto_added_event_id
+    native_rsvp = False
+    # Try to find an existing event if we don't have an ID yet
+    if not auto_added_event_id:
+        existing_event = cal.find_event(info.get("title", ""), final_start)
+        if existing_event:
+            auto_added_event_id = existing_event['id']
+            logger.info(f"Found existing event: {auto_added_event_id}")
 
-    if event:
-        # Sync to DB
-        db_meeting = Meeting(
-            user_id=current_user.id,
-            id=event.get('id'),
-            title=event.get('title'),
-            start_time=datetime.fromisoformat(final_start.replace('Z', '+00:00')),
-            end_time=datetime.fromisoformat(final_end.replace('Z', '+00:00')),
-            location=event.get('location'),
-            description=event.get('description'),
-            attendees=[]
+    if auto_added_event_id:
+        if plan.get("decision") == "accept" and final_start == info["start_time"]:
+            # Native RSVP for accepting invitations
+            event_data = cal.update_event_rsvp(auto_added_event_id, 'accepted')
+            if event_data:
+                native_rsvp = True
+                summary.append("Accepted invitation natively (Google Calendar will notify organizer).")
+                event = {"id": auto_added_event_id}
+            else:
+                event = {"id": auto_added_event_id}
+                summary.append("Auto-added meeting preserved.")
+        elif final_start != info["start_time"] or plan.get("decision") != "accept":
+            # If time changed or it wasn't a simple accept, we update it
+            event = cal.update_event(
+                event_id=auto_added_event_id,
+                title=info.get("title", "Email Meeting"),
+                start_datetime=final_start,
+                end_datetime=final_end,
+                location=info.get("location", ""),
+                description=info.get("notes", "")
+            )
+            # Update DB
+            db_meeting = db.query(Meeting).filter(Meeting.id == auto_added_event_id).first()
+            if db_meeting:
+                db_meeting.start_time = datetime.fromisoformat(final_start.replace('Z', '+00:00'))
+                db_meeting.end_time = datetime.fromisoformat(final_end.replace('Z', '+00:00'))
+                db.commit()
+            summary.append(f"Updated meeting '{event.get('title')}' in calendar.")
+        else:
+            event = {"id": auto_added_event_id}
+            summary.append("Auto-added meeting preserved.")
+    else:
+        event = cal.create_event(
+            title=info.get("title", "Email Meeting"),
+            start_datetime=final_start,
+            end_datetime=final_end,
+            location=info.get("location", ""),
+            description=info.get("notes", ""),
+            attendees=[], # Manual sync usually starts with reply to organizer
+            create_meet_link=True
         )
-        db.add(db_meeting)
-        db.commit()
-        summary.append(f"Meeting '{event.get('title')}' added to calendar.")
+
+        if event:
+            # Sync to DB
+            db_meeting = Meeting(
+                user_id=current_user.id,
+                id=event.get('id'),
+                title=event.get('title'),
+                start_time=datetime.fromisoformat(final_start.replace('Z', '+00:00')),
+                end_time=datetime.fromisoformat(final_end.replace('Z', '+00:00')),
+                location=event.get('location'),
+                description=event.get('description'),
+                attendees=[]
+            )
+            db.add(db_meeting)
+            db.commit()
+            summary.append(f"Meeting '{event.get('title')}' added to calendar.")
 
     return {
         "success": True,
         "summary": " | ".join(summary),
-        "event_id": event.get('id') if event else None
+        "event_id": auto_added_event_id,
+        "native_rsvp": native_rsvp
     }

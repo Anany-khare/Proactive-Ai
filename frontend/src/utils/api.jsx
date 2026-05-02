@@ -215,12 +215,13 @@ export const aiAPI = {
   smartReply: (emailId) => apiClient.post('/api/ai/smart-reply', { email_id: emailId }),
   extractMeeting: (text) => apiClient.post('/api/ai/meeting/extract', { text }),
   logProactiveAction: (logData) => apiClient.post('/api/ai/log-action', logData),
+  updateInsight: (emailId, rsvpStatus, replyText, eventId) => apiClient.post('/api/ai/update-insight', { email_id: emailId, rsvp_status: rsvpStatus, reply_text: replyText, event_id: eventId }),
 
   // Proactive rescheduling
   autoReschedule: () => apiClient.post('/api/ai/auto-reschedule'),
   getFreeSlots: (duration = 60, days = 7) => apiClient.get(`/api/ai/free-slots?duration=${duration}&days=${days}`),
-  executeProactiveSync: (emailId, meetingInfo, plan) => 
-    apiClient.post('/api/ai/execute-proactive-sync', { email_id: emailId, meeting_info: meetingInfo, plan }),
+  executeProactiveSync: (emailId, meetingInfo, plan, autoAddedEventId) => 
+    apiClient.post('/api/ai/execute-proactive-sync', { email_id: emailId, meeting_info: meetingInfo, plan, auto_added_event_id: autoAddedEventId }),
 };
 
 // Teams API

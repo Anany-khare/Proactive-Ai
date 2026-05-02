@@ -366,13 +366,14 @@ class GmailService:
                 userId='me',
                 id=message_id,
                 format='metadata',
-                metadataHeaders=['From', 'To', 'Subject', 'Message-ID']
+                metadataHeaders=['From', 'To', 'Subject', 'Message-ID', 'References']
             ).execute()
             
             headers = original_message['payload'].get('headers', [])
             from_email = next((h['value'] for h in headers if h['name'] == 'From'), '')
             subject = next((h['value'] for h in headers if h['name'] == 'Subject'), '')
             message_id_header = next((h['value'] for h in headers if h['name'] == 'Message-ID'), '')
+            existing_references = next((h['value'] for h in headers if h['name'] == 'References'), '')
             
             # Create reply message
             reply_subject = subject.startswith('Re:') and subject or f'Re: {subject}'
@@ -382,7 +383,12 @@ class GmailService:
             message['From'] = user_email
             message['Subject'] = reply_subject
             message['In-Reply-To'] = message_id_header
-            message['References'] = message_id_header
+            
+            if existing_references:
+                message['References'] = f"{existing_references} {message_id_header}"
+            else:
+                message['References'] = message_id_header
+                
             message.set_content(reply_text)
             
             raw_message = base64.urlsafe_b64encode(message.as_bytes()).decode('utf-8')
@@ -633,6 +639,31 @@ class CalendarService:
         except HttpError as error:
             print(f'An error occurred: {error}')
             return []
+            
+    def find_event(self, title: str, start_time: str) -> Optional[Dict]:
+        """Find an event by title and start time to identify existing invitations."""
+        try:
+            # Query window: +/- 5 minutes around start time
+            start_dt = datetime.fromisoformat(start_time.replace('Z', '+00:00'))
+            time_min = (start_dt - timedelta(minutes=5)).isoformat()
+            time_max = (start_dt + timedelta(minutes=5)).isoformat()
+            
+            events_result = self.service.events().list(
+                calendarId='primary',
+                timeMin=time_min,
+                timeMax=time_max,
+                q=title,
+                singleEvents=True
+            ).execute()
+            
+            events = events_result.get('items', [])
+            if events:
+                # Return the best match (closest title)
+                return events[0]
+            return None
+        except Exception as e:
+            print(f"Error finding event: {e}")
+            return None
     
     def get_event_by_id(self, event_id: str) -> Optional[Dict]:
         """Get a specific calendar event by ID"""
@@ -774,6 +805,52 @@ class CalendarService:
             return self._format_event(updated_event)
         except HttpError as error:
             print(f'Error updating event: {error}')
+            return None
+            
+    def update_event_rsvp(self, event_id: str, status: str) -> Optional[Dict]:
+        """
+        Update the RSVP status for the primary user on a specific event.
+        Status: 'accepted', 'declined', 'tentative'
+        """
+        try:
+            # 1. Get the event first
+            event = self.service.events().get(
+                calendarId='primary',
+                eventId=event_id
+            ).execute()
+            
+            # 2. Find the current user in attendees and update status
+            attendees = event.get('attendees', [])
+            user_email = self.service.calendars().get(calendarId='primary').execute().get('id')
+            
+            updated = False
+            for attendee in attendees:
+                if attendee.get('email') == user_email or attendee.get('self'):
+                    attendee['responseStatus'] = status
+                    updated = True
+                    break
+            
+            if not updated:
+                # If user not in attendees (rare for invites), add them
+                attendees.append({
+                    'email': user_email,
+                    'responseStatus': status,
+                    'self': True
+                })
+            
+            event['attendees'] = attendees
+            
+            # 3. Patch the event with sendUpdates='all' to notify organizer automatically
+            updated_event = self.service.events().patch(
+                calendarId='primary',
+                eventId=event_id,
+                body=event,
+                sendUpdates='all'
+            ).execute()
+            
+            return self._format_event(updated_event)
+        except HttpError as error:
+            print(f'Error updating RSVP: {error}')
             return None
     
     def delete_event(self, event_id: str) -> bool:

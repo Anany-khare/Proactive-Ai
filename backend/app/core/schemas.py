@@ -72,7 +72,7 @@ class EmailMarkReadRequest(BaseModel):
 
 class EmailThreadResponse(BaseModel):
     thread_id: str
-    emails: List[EmailDetailResponse]
+    messages: List[EmailDetailResponse]
 
 class EmailListResponse(BaseModel):
     emails: Optional[List[EmailResponse]] = None

@@ -238,13 +238,31 @@ async def process_new_emails_for_meetings(user_id: int, db: Session):
                     info = await extract_meeting_info(email_text, now_str)
                     if info and info.get("is_meeting"):
                         # Generate the proactive resolution plan
-                        plan = await generate_proactive_plan(user.id, info, db)
+                        plan = await generate_proactive_plan(user, info, db)
                         # Persist the insight
                         email_obj.ai_insight = {
                             "meeting_info": info,
                             "proactive_plan": plan
                         }
                         logger.info("Generated and saved AI insight for email %s", email_obj.id)
+                        
+                        if plan and plan.get("agent_reply_body") and credentials:
+                            # Send auto-reply for rescheduling based on Langchain decision
+                            try:
+                                import email as email_mod
+                                import base64
+                                msg = email_mod.message.EmailMessage()
+                                msg["To"] = email_obj.sender
+                                msg["From"] = user.email
+                                msg["Subject"] = f"Re: {email_obj.subject or '(no subject)'}"
+                                msg.set_content(plan["agent_reply_body"])
+                                raw = base64.urlsafe_b64encode(msg.as_bytes()).decode("utf-8")
+                                
+                                gmail = GmailService(credentials)
+                                gmail.service.users().messages().send(userId="me", body={"raw": raw}).execute()
+                                logger.info("Agent auto-reply sent to %s for email %s", email_obj.sender, email_obj.id)
+                            except Exception as e:
+                                logger.error("Failed to send agent auto-reply for email %s: %s", email_obj.id, e)
             except Exception as e:
                 logger.error("Failed to generate proactive insight for email %s: %s", email_obj.id, e)
 

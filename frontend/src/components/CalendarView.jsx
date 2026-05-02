@@ -14,7 +14,9 @@ function getWeekStartStatic(date) {
   const d = new Date(date);
   const day = d.getDay();
   const diff = d.getDate() - day + (day === 0 ? -6 : 1);
-  return new Date(d.setDate(diff));
+  d.setDate(diff);
+  d.setHours(0, 0, 0, 0);
+  return d;
 }
 
 const CalendarView = ({ view = 'week', onMeetingClick, onCreateMeeting, onViewChange }) => {
@@ -61,7 +63,16 @@ const CalendarView = ({ view = 'week', onMeetingClick, onCreateMeeting, onViewCh
         end.setHours(23, 59, 59, 999);
         response = await meetingAPI.getEventsByRange(start.toISOString(), end.toISOString());
       }
-      return response.data || [];
+      const data = response.data || [];
+      return data.map(event => {
+        if (event.start_datetime) {
+          const d = new Date(event.start_datetime);
+          const localDate = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+          const localTime = d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+          return { ...event, date: localDate, time: localTime };
+        }
+        return event;
+      });
     },
     staleTime: 5 * 60 * 1000, // 5 minutes
     gcTime: 10 * 60 * 1000,
@@ -73,7 +84,9 @@ const CalendarView = ({ view = 'week', onMeetingClick, onCreateMeeting, onViewCh
     const d = new Date(date);
     const day = d.getDay();
     const diff = d.getDate() - day + (day === 0 ? -6 : 1); // Adjust to Monday
-    return new Date(d.setDate(diff));
+    d.setDate(diff);
+    d.setHours(0, 0, 0, 0);
+    return d;
   };
 
   const getWeekDays = () => {

@@ -147,7 +147,7 @@ def pick_meeting_to_move(conflict: Dict) -> Dict:
     return a  # move A
 
 
-def generate_proactive_plan(user: User, meeting_info: Dict, db: Session) -> Dict:
+async def generate_proactive_plan(user: User, meeting_info: Dict, db: Session) -> Dict:
     """
     Evaluate a proposed meeting info (extracted from email) against existing calendar.
     Returns a 'Plan' dict:
@@ -198,6 +198,63 @@ def generate_proactive_plan(user: User, meeting_info: Dict, db: Session) -> Dict
 
     # Handle first conflict found
     conflict = conflicts[0]
+    
+    # NEW INTEGRATION: Use Langchain Agent to resolve priority and generate reply
+    from app.agents.meeting_agent import analyze_meeting_conflict_with_langchain
+    
+    proposed_title = meeting_info.get("title", "Proposed Meeting")
+    existing_title = conflict.get("title", "Existing Meeting")
+    proposed_sender = meeting_info.get("sender", "Unknown Sender")
+    existing_attendees = conflict.get("attendees", [])
+    if isinstance(existing_attendees, str):
+        try:
+            import json
+            existing_attendees = json.loads(existing_attendees)
+            existing_attendees = [a.get("email") if isinstance(a, dict) else a for a in existing_attendees]
+        except:
+            existing_attendees = []
+
+    agent_result = await analyze_meeting_conflict_with_langchain(
+        proposed_title, 
+        existing_title, 
+        proposed_sender, 
+        existing_attendees
+    )
+    
+    if agent_result:
+        decision = agent_result.get("decision")
+        reply_body = agent_result.get("reply_body")
+        reason = agent_result.get("reason")
+        
+        free_slots = find_free_slots(user.id, db, duration_minutes=60, days_ahead=3)
+        
+        if decision == "reschedule_existing":
+            slot = free_slots[0] if free_slots else None
+            return {
+                "has_conflict": True,
+                "conflict_id": conflict["id"],
+                "conflict_with": conflict["title"],
+                "decision": "reschedule_existing",
+                "priority_comparison": "higher",
+                "message": f"Conflict with '{conflict['title']}'. Agent decided: {reason}. I'll move '{conflict['title']}' to {slot['display_start'] if slot else 'a later slot'}.",
+                "suggested_slot": slot["start"] if slot else None,
+                "agent_reply_body": reply_body
+            }
+        else:
+            better_slots = [s for s in free_slots if datetime.fromisoformat(s["start"]) >= prop_end or datetime.fromisoformat(s["end"]) <= prop_start]
+            slot = better_slots[0] if better_slots else (free_slots[0] if free_slots else None)
+            return {
+                "has_conflict": True,
+                "conflict_id": conflict["id"],
+                "conflict_with": conflict["title"],
+                "decision": "suggest_new_slot",
+                "priority_comparison": "lower",
+                "message": f"Conflict with '{conflict['title']}'. Agent decided: {reason}. Suggested new time: {slot['display_start'] if slot else 'TBD'}.",
+                "suggested_slot": slot["start"] if slot else None,
+                "agent_reply_body": reply_body
+            }
+            
+    # Fallback to old heuristic if Langchain fails or no key
     existing_priority = _meeting_priority_score(conflict)
     
     # Evaluate proposed meeting priority
