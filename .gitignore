@@ -68,6 +68,19 @@ Thumbs.db
 celerybeat-schedule
 celerybeat.pid
 
+# Testing and Coverage
+.pytest_cache/
+.coverage
+htmlcov/
+coverage/
+.nyc_output/
+test-results/
+playwright-report/
+blob-report/
+.playwright/
+backend/report.html
+frontend/html/
+
 # Alembic
 alembic/versions/*.pyc
 
