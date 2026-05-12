@@ -131,7 +131,7 @@ async def chat(
     # MEETING AUTOMATION INTERCEPT
     # Detect the [SCHEDULE_MEETING] JSON output by parsing the text via Regex
     # ---------------------------------------------------------------------------------
-    match = re.search(r'\[SCHEDULE_MEETING\](.*?)\[/SCHEDULE_MEETING\]', raw_reply, re.DOTALL)
+    match = re.search(r'\[SCHEDULE_MEETING\][^{]*(\{.*?\})', raw_reply, re.DOTALL)
     if match:
         json_str = match.group(1).strip()
         try:
@@ -218,7 +218,7 @@ async def chat(
                         if was_rescheduled:
                             start_dt = s_obj.isoformat()
                             end_dt = e_obj.isoformat()
-                            proactive_note = f"\n\n[Proactive Action Taken: Logistical conflict detected. I autonomously re-routed this meeting to a free slot within your working hours at {s_obj.strftime('%I:%M %p')} on {s_obj.strftime('%b %d')}]"
+                            proactive_note = f"\n\n*Note: I noticed a scheduling conflict, so I proactively rescheduled this meeting to a free slot at {s_obj.strftime('%I:%M %p')} on {s_obj.strftime('%b %d')}.*"
                 except Exception as loop_err:
                     logger.error(f"Error in proactive reschedule loop: {loop_err}")
 
@@ -247,12 +247,31 @@ async def chat(
                     db.add(db_meeting)
                     db.commit()
                 
-                # Cleanup the strict JSON logic from the bot's user-facing reply
-                clean_reply = raw_reply.replace(match.group(0), "").strip() + proactive_note
+                # Build a friendly confirmation instead of relying on (now-empty) LLM text
+                if event:
+                    try:
+                        s_nice = datetime.fromisoformat(start_dt.replace('Z', '+00:00')).strftime('%I:%M %p')
+                        e_nice = datetime.fromisoformat(end_dt.replace('Z', '+00:00')).strftime('%I:%M %p')
+                        date_nice = datetime.fromisoformat(start_dt.replace('Z', '+00:00')).strftime('%B %d, %Y')
+                    except Exception:
+                        s_nice, e_nice, date_nice = start_dt, end_dt, ''
+                    att_str = ', '.join(attendees) if attendees else 'no attendees'
+                    clean_reply = (
+                        f"Done! Your meeting has been scheduled.\n\n"
+                        f"Title: {title}\n"
+                        f"Date: {date_nice}\n"
+                        f"Time: {s_nice} - {e_nice}\n"
+                        f"Attendees: {att_str}"
+                    )
+                    if create_meet_link and event.get('meet_link'):
+                        clean_reply += f"\nGoogle Meet: {event['meet_link']}"
+                    clean_reply += proactive_note
+                else:
+                    clean_reply = "I tried to schedule the meeting but Google Calendar returned an error. Please try again." + proactive_note
 
         except Exception as e:
             logger.error(f"Failed to auto-schedule meeting via LLM agent: {e}")
-            clean_reply = raw_reply.replace(match.group(0), "").strip()
+            clean_reply = re.sub(r'\[SCHEDULE_MEETING\].*', '', raw_reply, flags=re.DOTALL).strip()
             clean_reply += "\n\n*(Note: I encountered an error while trying to automatically schedule the meeting to your Google Calendar. Please check your formatting.)*"
 
     # Save assistant message

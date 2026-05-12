@@ -86,7 +86,7 @@ const ProfileSetup = () => {
     {
       key: 'calendarAccess',
       title: 'Calendar Access',
-      description: 'Allow Proactive AI to read and manage your calendar events',
+      description: 'Allow Orin AI to read and manage your calendar events',
       icon: '📅',
       benefits: ['Smart scheduling', 'Meeting optimization', 'Time blocking']
     },
@@ -107,17 +107,17 @@ const ProfileSetup = () => {
   ];
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 dark:from-gray-900 dark:to-gray-800 py-8 px-4">
+    <div className="min-h-screen bg-gray-950 py-8 px-4">
       <div className="max-w-4xl mx-auto">
         <div className="text-center mb-8">
           <div className="w-20 h-20 bg-gradient-to-br from-primary-500 to-primary-600 rounded-3xl flex items-center justify-center mx-auto mb-6">
-            <span className="text-white font-bold text-3xl">P</span>
+            <span className="text-white font-bold text-3xl">O</span>
           </div>
           <h1 className="text-4xl font-bold text-gray-900 dark:text-white mb-4">
             Complete Your Profile
           </h1>
           <p className="text-xl text-gray-600 dark:text-gray-400 max-w-2xl mx-auto">
-            Set up your preferences and grant permissions to unlock the full power of Proactive AI
+            Set up your preferences and grant permissions to unlock the full power of Orin AI
           </p>
         </div>
 
@@ -208,7 +208,7 @@ const ProfileSetup = () => {
             </h2>
             <div className="flex items-center justify-between mb-8">
               <p className="text-gray-600 dark:text-gray-400">
-                Enable these features to get the most out of Proactive AI. You can change these settings anytime.
+                Enable these features to get the most out of Orin AI. You can change these settings anytime.
               </p>
               <div className="flex items-center space-x-3 bg-primary-50 dark:bg-primary-900/20 px-4 py-2 rounded-lg border border-primary-100 dark:border-primary-800">
                 <span className="text-sm font-medium text-primary-700 dark:text-primary-300">Grant All Permissions</span>

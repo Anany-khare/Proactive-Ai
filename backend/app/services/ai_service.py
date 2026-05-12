@@ -38,14 +38,14 @@ FALLBACK_EMAIL_RESPONSE = (
 # ---------------------------------------------------------------------------
 # Ollama (primary — local, no key required)
 OLLAMA_BASE_URL = "http://localhost:11434"
-OLLAMA_MODEL = "llama3.2"  # change to any model you've pulled
+OLLAMA_MODEL = "llama3.2"
 
 # Gemini (fallback — cloud, needs API key)
 GEMINI_API_URL = (
     "https://generativelanguage.googleapis.com/v1beta/models/"
     "{model}:generateContent?key={key}"
 )
-GEMINI_MODEL = "gemini-2.0-flash"
+GEMINI_MODEL = "gemini-2.5-flash"
 
 
 # ---------------------------------------------------------------------------
@@ -160,7 +160,16 @@ def get_user_context(user_id: int, db: Session) -> dict:
 def _format_context_block(context: dict) -> str:
     """Turn the context dict into a readable block for the system prompt."""
     lines = []
-    lines.append(f"Current System Offset Aware Date & Time: {context.get('current_time', 'Unknown')}")
+    try:
+        from datetime import datetime
+        now = datetime.fromisoformat(context.get('current_time'))
+        import calendar
+        lines.append(f"CURRENT SYSTEM DATE: Today is {now.strftime('%A, %B %d, %Y')} at {now.strftime('%I:%M %p')}.")
+        tomorrow = now + __import__('datetime').timedelta(days=1)
+        lines.append(f"TOMORROW is {tomorrow.strftime('%A, %B %d, %Y')}.")
+        lines.append(f"ISO Datetime for API reference: {context.get('current_time')}")
+    except Exception:
+        lines.append(f"Current System Offset Aware Date & Time: {context.get('current_time', 'Unknown')}")
     lines.append(f"Unread emails: {context['unread_emails']}")
 
     if context["meetings_upcoming"]:
@@ -211,15 +220,19 @@ def build_chat_prompt(user_message: str, context: dict, history: List[Dict] = No
         history_block = "\n=== Conversation History ===\n" + "\n".join(history_lines) + "\n"
 
     return (
-        "You are a proactive, intelligent AI assistant embedded in a personal productivity dashboard. "
-        "You have access to the user's real-time context shown below. Use it to give helpful, "
-        "specific, and actionable answers. Be concise but thorough.\n\n"
-        "IMPORTANT SCHEDULING RULE: If the user explicitly asks to schedule a new meeting, "
-        "you MUST extract the details and output a JSON array block anywhere in your response EXACTLY like this:\n"
-        "[SCHEDULE_MEETING] {\"title\": \"...\", \"start_datetime\": \"YYYY-MM-DDTHH:MM:00+05:30\", \"end_datetime\": \"YYYY-MM-DDTHH:MM:00+05:30\", \"location\": \"...\", \"description\": \"...\", \"attendees\": [\"email1@ex.com\", \"...\"], \"create_meet_link\": true/false} [/SCHEDULE_MEETING]\n"
-        "TEAM LOOKUP: If the user explicitly mentions a team name (e.g., 'Marketing Team') from the context below, populate the `attendees` array with all member emails for that team. "
-        "Strict Rule: DO NOT automatically include entire teams if the user only provides an individual email or name. Only include teams when the team name is mentioned.\n\n"
-        "Ensure dates are strictly converted to ISO 8601 format natively PRESERVING the exact localized offset provided in the System Date. DO NOT output 'Z' or convert to UTC. Output conversational text acknowledging the action outside these tags.\n\n"
+        "You are a helpful, human-like productivity assistant embedded in a dashboard. "
+        "You have access to the user's real-time context shown below. "
+        "Give natural, conversational answers. NEVER use robotic bracketed tags in normal conversation.\n\n"
+        "CRITICAL INSTRUCTION - MEETING SCHEDULING:\n"
+        "If the user says 'schedule', 'book', 'meet', or asks to create a calendar event, you MUST include this EXACT JSON block in your response so the system can schedule it:\n"
+        "[SCHEDULE_MEETING] {\"title\": \"...\", \"start_datetime\": \"YYYY-MM-DDTHH:MM:00+05:30\", \"end_datetime\": \"YYYY-MM-DDTHH:MM:00+05:30\", \"location\": \"...\", \"description\": \"...\", \"attendees\": [\"email@ex.com\"], \"create_meet_link\": true} [/SCHEDULE_MEETING]\n\n"
+        "EXAMPLE OF SCHEDULING:\n"
+        "User: Schedule a meet from 3pm to 3.30 pm with bob@gmail.com\n"
+        "Assistant: [SCHEDULE_MEETING] {\"title\": \"Meeting with Bob\", \"start_datetime\": \"2026-05-12T15:00:00+05:30\", \"end_datetime\": \"2026-05-12T15:30:00+05:30\", \"location\": \"\", \"description\": \"\", \"attendees\": [\"bob@gmail.com\"], \"create_meet_link\": true} [/SCHEDULE_MEETING]\n"
+        "I have scheduled the meeting with Bob for 3:00 PM.\n\n"
+        "If the user is NOT scheduling a meeting (e.g. asking for a summary or chatting), DO NOT output the JSON block.\n\n"
+        "TEAM LOOKUP: If a team name (e.g., 'Marketing') is mentioned, populate attendees with their emails from context.\n"
+        "Ensure dates are ISO 8601 with offset (e.g. +05:30). DO NOT convert to UTC. Use the date from the LATEST user message. If no date is given, use TODAY'S date.\n\n"
         f"=== User Context ===\n{ctx_block}\n=== End Context ===\n"
         f"{history_block}\n"
         f"User: {user_message}\n\n"
@@ -247,17 +260,37 @@ def build_email_reply_prompt(email_body: str, context: dict) -> str:
 async def _call_ollama(prompt: str) -> Optional[str]:
     """Call the local Ollama REST API. Returns None if Ollama is unreachable."""
     url = f"{OLLAMA_BASE_URL}/api/generate"
+    # Separate system instructions from user input to force Llama 3.2 to follow rules
+    system_part = prompt
+    user_part = prompt
+    if "User: " in prompt:
+        parts = prompt.rsplit("User: ", 1)
+        system_part = parts[0].strip()
+        user_part = parts[1].replace("Assistant:", "").strip()
+    
+    # Dynamic routing: Use fast 1B model for chat/summaries, and smart 3B model for scheduling JSON
+    target_model = "llama3.2:1b"
+    if any(word in user_part.lower() for word in ['schedule', 'book', 'meet', 'calendar']):
+        target_model = "llama3.2"
+        # Heavily force the 3B model to avoid conversational fluff
+        system_part += "\n\nCRITICAL: You are currently executing a SCHEDULING TASK. You MUST output ONLY the [SCHEDULE_MEETING] JSON block and NO OTHER conversational text."
+        logger.info("Routing request to smarter 3B model for scheduling task.")
+    else:
+        logger.info("Routing request to faster 1B model for general chat.")
+
     payload = {
-        "model": OLLAMA_MODEL,
-        "prompt": prompt,
+        "model": target_model,
+        "system": system_part,
+        "prompt": user_part,
         "stream": False,
         "options": {
-            "temperature": 0.7,
+            "temperature": 0.3, # Lower temperature for scheduling accuracy
             "num_predict": 1024,
         },
     }
     try:
-        async with httpx.AsyncClient(timeout=120.0) as client:
+        # Increased timeout to 180 seconds to allow slow local models to complete
+        async with httpx.AsyncClient(timeout=180.0) as client:
             response = await client.post(url, json=payload)
         if response.status_code == 200:
             data = response.json()
@@ -476,13 +509,21 @@ def detect_meeting_conflicts_sync(user_id: int, db: Session) -> List[Dict]:
     for i, m1 in enumerate(meetings):
         for m2 in meetings[i + 1:]:
             try:
+                from datetime import timezone
                 s1 = datetime.fromisoformat(m1["start"])
                 e1 = datetime.fromisoformat(m1["end"])
                 s2 = datetime.fromisoformat(m2["start"])
                 e2 = datetime.fromisoformat(m2["end"])
+                
+                # Normalize to naive UTC to prevent TypeError and normalize dates
+                if s1.tzinfo: s1 = s1.astimezone(timezone.utc).replace(tzinfo=None)
+                if e1.tzinfo: e1 = e1.astimezone(timezone.utc).replace(tzinfo=None)
+                if s2.tzinfo: s2 = s2.astimezone(timezone.utc).replace(tzinfo=None)
+                if e2.tzinfo: e2 = e2.astimezone(timezone.utc).replace(tzinfo=None)
+
             except (ValueError, TypeError):
                 continue
-            # Only compare meetings on the same calendar day
+            # Only compare meetings on the same calendar day (in UTC)
             if s1.date() != s2.date():
                 continue
             # Overlap check: s1 < e2 and s2 < e1

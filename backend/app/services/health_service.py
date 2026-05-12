@@ -135,6 +135,10 @@ async def fetch_google_fit_steps(user_id: int, db: Session, date: str = None) ->
         return total_steps
 
     except Exception as e:
+        import logging
+        logging.getLogger(__name__).error(f"Google Fit steps error: {e}")
+        if "403" in str(e) or "401" in str(e) or "Permission" in str(e):
+            raise ValueError("Insufficient Google Fit Permissions")
         return 0
 
 
@@ -175,9 +179,12 @@ async def fetch_google_fit_sleep(user_id: int, db: Session, date: str = None) ->
                     if sleep_type in (2, 4, 5, 6):
                         total_sleep_ms += (end_ns - start_ns) / 1_000_000
 
+        total_sleep_minutes = int(total_sleep_ms / (1000 * 60))
         return total_sleep_minutes
 
     except Exception as e:
+        import logging
+        logging.getLogger(__name__).error(f"Google Fit sleep error: {e}")
         return 0
 
 
@@ -220,6 +227,8 @@ async def fetch_google_fit_heart_rate(user_id: int, db: Session, date: str = Non
         return 0
 
     except Exception as e:
+        import logging
+        logging.getLogger(__name__).error(f"Google Fit sleep error: {e}")
         return 0
 
 
@@ -252,6 +261,8 @@ async def fetch_google_fit_calories(user_id: int, db: Session, date: str = None)
         calories = int(total)
         return calories
     except Exception as e:
+        import logging
+        logging.getLogger(__name__).error(f"Google Fit sleep error: {e}")
         return 0
 
 
@@ -282,6 +293,8 @@ async def fetch_google_fit_active_minutes(user_id: int, db: Session, date: str =
                         total += val.get("intVal", 0)
         return total
     except Exception as e:
+        import logging
+        logging.getLogger(__name__).error(f"Google Fit sleep error: {e}")
         return 0
 
 

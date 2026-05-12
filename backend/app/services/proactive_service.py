@@ -190,6 +190,32 @@ async def generate_proactive_plan(user: User, meeting_info: Dict, db: Session) -
             continue
 
     if not conflicts:
+        # Check for blocked lunch hour (1 PM to 2 PM)
+        # 13 is 1 PM, 14 is 2 PM
+        if prop_start.hour == 13 or (prop_start.hour < 13 and prop_end.hour >= 14):
+            # Check if it's an urgent 1-on-1
+            title_lower = meeting_info.get("title", "").lower()
+            notes_lower = meeting_info.get("notes", "").lower()
+            is_1on1 = "1-on-1" in title_lower or "1 on 1" in title_lower or "1:1" in title_lower
+            is_urgent = "urgent" in title_lower or "urgent" in notes_lower
+            
+            if is_1on1 and is_urgent:
+                 return {
+                     "has_conflict": True,
+                     "decision": "suggest_new_slot",
+                     "message": "This is during your lunch break (1-2 PM), but since it's an urgent 1-on-1, please review and confirm if you want to accept.",
+                     "priority_comparison": "lower",
+                     "conflict_with": "Lunch Break (1-2 PM)"
+                 }
+            else:
+                 return {
+                     "has_conflict": True,
+                     "decision": "decline",
+                     "message": "Automatically flagging as decline since this falls within your blocked lunch break (1-2 PM).",
+                     "priority_comparison": "lower",
+                     "conflict_with": "Lunch Break (1-2 PM)"
+                 }
+
         return {
             "has_conflict": False,
             "decision": "accept",

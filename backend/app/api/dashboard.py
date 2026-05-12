@@ -120,7 +120,7 @@ def trigger_sync_if_needed(current_user: User, db: Session, background_tasks: Ba
         # Check staleness
         if current_user.last_synced_at:
              time_since_sync = datetime.now() - current_user.last_synced_at.replace(tzinfo=None)
-             if time_since_sync.total_seconds() > 30: # 30s for "Live" feel
+             if time_since_sync.total_seconds() > 300: # 5 mins to prevent hitting Google APIs constantly
                  should_trigger_sync = True
         else:
              should_trigger_sync = True
@@ -162,8 +162,11 @@ def trigger_sync_if_needed(current_user: User, db: Session, background_tasks: Ba
 async def get_contextual_data(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
-    background_tasks: BackgroundTasks = BackgroundTasks()
+    background_tasks: BackgroundTasks = None
 ):
+    if background_tasks is None:
+        background_tasks = BackgroundTasks()
+
     """Get all contextual dashboard data (Cached + DB Read Only)"""
     import time
     start_time = time.time()
@@ -266,23 +269,8 @@ async def get_contextual_data(
     
     # Formulate a summary/insight
 
-    from app.services.ai_service import generate_chat_response
-    
-    context_prompt = f"Today's schedule: {len(meetings_response)} meetings. "
-    if meetings_response:
-        context_prompt += f"First one is '{meetings_response[0].title}' at {meetings_response[0].time}. "
-    context_prompt += f"Priority emails: {len([e for e in emails_response if e.priority == 'high'])}. Pending tasks: {len(todos_response)}."
-    
-    try:
-        insight = await generate_chat_response(
-            f"System context update: {context_prompt}. Provide a 1-sentence proactive summary/tip for the user starting their day.",
-            history=[],
-            user_id=current_user.id,
-            db=db
-        )
-    except Exception as e:
-        print(f"Failed to generate AI insight: {e}")
-        insight = "Stay productive! Check your priority emails and upcoming meetings."
+    # Removed synchronous LLM call for insight to drastically improve dashboard load speed
+    insight = "Stay productive! Check your priority emails and upcoming meetings."
 
     dashboard_data = DashboardData(
         dailyBrief=daily_brief,
@@ -317,10 +305,12 @@ async def get_contextual_data(
 async def get_emails(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
-    background_tasks: BackgroundTasks = BackgroundTasks(),
+    background_tasks: BackgroundTasks = None,
     limit: int = 20,
     offset: int = 0
 ):
+    if background_tasks is None:
+        background_tasks = BackgroundTasks()
     """Get emails from DB"""
     # Trigger sync if empty
     trigger_sync_if_needed(current_user, db, background_tasks, force_check=False)

@@ -171,7 +171,11 @@ const CalendarView = ({ view = 'week', onMeetingClick, onCreateMeeting, onViewCh
       if (onCreateMeeting) onCreateMeeting();
     } catch (err) {
       console.error('Error creating meeting:', err);
-      alert('Failed to create meeting. Please try again.');
+      if (err.response && err.response.status === 409) {
+        alert(err.response.data.detail || 'Meeting conflict detected.');
+      } else {
+        alert('Failed to create meeting. Please try again.');
+      }
     } finally {
       setIsCreating(false);
     }

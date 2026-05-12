@@ -50,15 +50,15 @@ const Signup = () => {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 dark:from-gray-900 dark:to-gray-800 flex items-center justify-center p-4">
+    <div className="min-h-screen bg-gray-950 flex items-center justify-center p-4">
       <div className="w-full max-w-md">
         <Card className="p-8 shadow-xl">
           <div className="text-center mb-8">
             <div className="w-16 h-16 bg-gradient-to-br from-primary-500 to-primary-600 rounded-2xl flex items-center justify-center mx-auto mb-4">
-              <span className="text-white font-bold text-2xl">P</span>
+              <span className="text-white font-bold text-2xl">O</span>
             </div>
             <h1 className="text-3xl font-bold text-gray-900 dark:text-white mb-2">Create Account</h1>
-            <p className="text-gray-600 dark:text-gray-400">Join Proactive AI and take control of your productivity</p>
+            <p className="text-gray-600 dark:text-gray-400">Join Orin AI and take control of your productivity</p>
           </div>
 
           <form onSubmit={handleSubmit} className="space-y-6">

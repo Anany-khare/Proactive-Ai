@@ -193,7 +193,7 @@ export const adminAPI = {
 // AI API
 export const aiAPI = {
   // Chat with AI assistant
-  chat: (message) => apiClient.post('/api/ai/chat', { message }),
+  chat: (message) => apiClient.post('/api/ai/chat', { message }, { timeout: 180000 }),
 
   // Chat history
   getChatHistory: (limit = 50) => apiClient.get(`/api/ai/chat/history?limit=${limit}`),

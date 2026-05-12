@@ -22,6 +22,7 @@ const Settings = () => {
   const [isEditing, setIsEditing] = useState(false);
   const [editName, setEditName] = useState('');
   const [saving, setSaving] = useState(false);
+  const [imageError, setImageError] = useState(false);
 
   // Preference update states
   const [updatingPref, setUpdatingPref] = useState(null);
@@ -148,18 +149,24 @@ const Settings = () => {
           <div className="h-32 bg-gradient-to-r from-[#4f46e5] to-[#7c3aed] w-full" />
           <CardContent className="pt-0 -mt-12 flex flex-col items-center pb-8">
             <div className="relative isolate">
-              {profileData?.picture ? (
+              {profileData?.picture && !imageError ? (
                 <div className="relative">
                   <img
                     src={profileData.picture}
                     alt={profileData.name || 'Profile'}
-                    className="w-24 h-24 rounded-full border-4 border-[#0c0c1e] shadow-lg"
+                    className="w-24 h-24 rounded-full border-4 border-[#0c0c1e] shadow-lg object-cover"
+                    onError={() => setImageError(true)}
                   />
                   <div className="absolute bottom-1 right-1 w-4 h-4 bg-green-500 border-2 border-[#0c0c1e] rounded-full z-10" />
                 </div>
               ) : (
-                <div className="w-24 h-24 rounded-full bg-gray-200 dark:bg-gray-800 flex items-center justify-center border-4 border-[#0c0c1e] shadow-lg">
-                  <User className="w-12 h-12 text-gray-400" />
+                <div className="relative">
+                  <div className="w-24 h-24 rounded-full bg-gradient-to-br from-primary-500 to-primary-600 flex items-center justify-center border-4 border-[#0c0c1e] shadow-lg">
+                    <span className="text-3xl font-bold text-white">
+                      {profileData?.name ? profileData.name.charAt(0).toUpperCase() : 'O'}
+                    </span>
+                  </div>
+                  <div className="absolute bottom-1 right-1 w-4 h-4 bg-green-500 border-2 border-[#0c0c1e] rounded-full z-10" />
                 </div>
               )}
               <div className="absolute top-0 right-0 left-0 bottom-0 rounded-full border border-white/20 -z-10 animate-pulse" />

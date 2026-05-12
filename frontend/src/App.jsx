@@ -52,7 +52,7 @@ function AppContent() {
 
   // For authenticated routes, render with navbar and sidebar below
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-950 flex flex-col">
+    <div className="h-screen overflow-hidden bg-gray-950 flex flex-col">
       {/* Mobile Menu Overlay */}
       {mobileMenuOpen && (
         <div 
@@ -75,9 +75,9 @@ function AppContent() {
           </button>
           <div className="flex items-center space-x-2">
             <div className="w-8 h-8 bg-gradient-to-br from-primary-500 to-primary-600 rounded-lg flex items-center justify-center">
-              <span className="text-white font-bold text-sm">P</span>
+              <span className="text-white font-bold text-sm">O</span>
             </div>
-            <span className="font-semibold text-gray-900 dark:text-gray-100">Proactive AI</span>
+            <span className="font-semibold text-gray-900 dark:text-gray-100">Orin AI</span>
           </div>
           <div className="w-8 h-8 bg-gradient-to-br from-gray-400 to-gray-500 rounded-full flex items-center justify-center">
             <span className="text-white text-sm font-medium">JD</span>
@@ -91,7 +91,7 @@ function AppContent() {
       </div>
 
       {/* Main Content Area with Sidebar */}
-      <div className="flex-1 flex min-w-0 transition-all duration-300 ease-in-out">
+      <div className="flex-1 flex min-w-0 min-h-0 overflow-hidden transition-all duration-300 ease-in-out">
         {/* Sidebar - Below Navbar */}
         <div className={`fixed inset-y-0 left-0 z-50 lg:relative lg:z-auto lg:flex-shrink-0 ${
           mobileMenuOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'
@@ -103,7 +103,7 @@ function AppContent() {
         </div>
 
         {/* Routed Content */}
-        <main className="flex-1 p-4 lg:p-6 overflow-auto">
+        <main className="flex-1 flex flex-col p-4 lg:p-6 overflow-y-auto min-h-0 min-w-0 custom-scrollbar">
           <Suspense fallback={<div className="text-gray-600 dark:text-gray-300">Loading...</div>}>
             <Routes>
               {/* Protected Routes */}

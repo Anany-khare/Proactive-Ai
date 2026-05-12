@@ -26,14 +26,14 @@ const Login = () => {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-primary-50 to-primary-100 dark:from-gray-900 dark:to-gray-800 px-4">
+    <div className="min-h-screen flex items-center justify-center bg-gray-950 px-4">
       <div className="max-w-md w-full space-y-8 bg-white dark:bg-gray-800 p-8 rounded-xl shadow-lg">
         <div className="text-center">
           <div className="w-16 h-16 bg-gradient-to-br from-primary-500 to-primary-600 rounded-lg flex items-center justify-center mx-auto mb-4">
-            <span className="text-white font-bold text-2xl">P</span>
+            <span className="text-white font-bold text-2xl">O</span>
           </div>
           <h2 className="text-3xl font-bold text-gray-900 dark:text-gray-100">
-            Welcome to Proactive AI
+            Welcome to Orin AI
           </h2>
           <p className="mt-2 text-sm text-gray-600 dark:text-gray-400">
             Sign in with your Google account to continue

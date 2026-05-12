@@ -22,6 +22,8 @@ def _sanitize_rfc3339(dt_str: str) -> str:
         return dt_str
         
     dt_str = str(dt_str)
+    # Fix missing T separator
+    dt_str = dt_str.replace(" ", "T")
     # Fix datetime-local missing seconds ("YYYY-MM-DDThh:mm")
     if len(dt_str) == 16 and dt_str[10] == 'T':
         dt_str += ':00'
@@ -51,11 +53,46 @@ async def create_meeting(
         )
     
     try:
+        # Check for conflicts first
+        from app.services.ai_service import get_upcoming_meetings
+        from datetime import datetime, timezone
+        start_dt_str = _sanitize_rfc3339(meeting_data.start_datetime)
+        end_dt_str = _sanitize_rfc3339(meeting_data.end_datetime)
+        try:
+            start_obj = datetime.fromisoformat(start_dt_str.replace('Z', '+00:00'))
+            end_obj = datetime.fromisoformat(end_dt_str.replace('Z', '+00:00'))
+            
+            # Normalize to naive UTC
+            if start_obj.tzinfo: start_obj = start_obj.astimezone(timezone.utc).replace(tzinfo=None)
+            if end_obj.tzinfo: end_obj = end_obj.astimezone(timezone.utc).replace(tzinfo=None)
+            
+            upcoming = get_upcoming_meetings(current_user.id, db, days=14)
+            for m in upcoming:
+                try:
+                    m_s = datetime.fromisoformat(m['start'].replace('Z', '+00:00'))
+                    m_e = datetime.fromisoformat(m['end'].replace('Z', '+00:00'))
+                    
+                    # Normalize to naive UTC
+                    if m_s.tzinfo: m_s = m_s.astimezone(timezone.utc).replace(tzinfo=None)
+                    if m_e.tzinfo: m_e = m_e.astimezone(timezone.utc).replace(tzinfo=None)
+
+                    if m_s < end_obj and start_obj < m_e:
+                        raise HTTPException(
+                            status_code=status.HTTP_409_CONFLICT,
+                            detail=f"Conflict detected with existing meeting '{m['title']}' from {m_s.strftime('%I:%M %p')} to {m_e.strftime('%I:%M %p')}."
+                        )
+                except (ValueError, TypeError):
+                    pass
+        except HTTPException:
+            raise
+        except Exception as e:
+            print(f"Error checking conflicts: {e}")
+
         calendar_service = CalendarService(credentials)
         event = calendar_service.create_event(
             title=meeting_data.title,
-            start_datetime=_sanitize_rfc3339(meeting_data.start_datetime),
-            end_datetime=_sanitize_rfc3339(meeting_data.end_datetime),
+            start_datetime=start_dt_str,
+            end_datetime=end_dt_str,
             location=meeting_data.location,
             description=meeting_data.description,
             attendees=meeting_data.attendees

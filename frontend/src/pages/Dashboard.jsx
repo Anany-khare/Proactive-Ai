@@ -11,6 +11,7 @@ import { useNavigate } from 'react-router-dom';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../components/ui/dialog.jsx';
 import { Moon, Footprints, Activity, RefreshCw, Link, ToggleLeft, ToggleRight } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.jsx';
+import { DashboardSkeleton } from '../components/LoadingSkeleton.jsx';
 
 // ─── Circular Progress Ring ──────────────────────────────────────────────────
 const CircularProgress = ({ value, max, size = 64, strokeWidth = 5, color = '#8b5cf6', label, sublabel }) => {
@@ -40,6 +41,7 @@ const CircularProgress = ({ value, max, size = 64, strokeWidth = 5, color = '#8b
 // ─── Health & Readiness Card ─────────────────────────────────────────────────
 const HealthCard = ({ health }) => {
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
   const [showManual, setShowManual] = useState(false);
   const [manualSleep, setManualSleep] = useState('');
   const [manualSteps, setManualSteps] = useState('');
@@ -54,18 +56,6 @@ const HealthCard = ({ health }) => {
     staleTime: 60 * 1000,
     retry: false,
   });
-
-  const handleConnectFitbit = async () => {
-    setConnecting(true);
-    try {
-      const res = await healthAPI.getConnectUrl();
-      window.open(res.data.auth_url, '_blank');
-    } catch (err) {
-      console.error('Fitbit connect error:', err);
-    } finally {
-      setConnecting(false);
-    }
-  };
 
   const handleManualSave = async () => {
     setSaving(true);
@@ -89,8 +79,16 @@ const HealthCard = ({ health }) => {
     try {
       await healthAPI.sync();
       queryClient.invalidateQueries({ queryKey: ['dashboard-contextual'] });
+      alert("Health data synced successfully.");
     } catch (err) {
       console.error('Sync error:', err);
+      if (err.response?.status === 403 && err.response?.data?.detail?.includes('log out')) {
+        alert("Action Required: Please log out and log back in to grant Proactive-AI permission to read your Google Fit data.");
+      } else if (err.response?.status === 422) {
+        alert(err.response.data.detail?.message || "Failed to find health data.");
+      } else {
+        alert("Failed to sync health data. Please try again.");
+      }
     }
   };
 
@@ -115,7 +113,7 @@ const HealthCard = ({ health }) => {
           </div>
           <div className="flex items-center space-x-1">
             {fitbitStatus?.connected && (
-              <Button variant="ghost" size="sm" onClick={handleSync} title="Sync from Fitbit"
+              <Button variant="ghost" size="sm" onClick={handleSync} title="Sync Health Data"
                 className="h-7 w-7 p-0 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-200/50 dark:hover:bg-emerald-800/50">
                 <RefreshCw className="w-3.5 h-3.5" />
               </Button>
@@ -212,11 +210,19 @@ const HealthCard = ({ health }) => {
           <div className="text-center py-4 space-y-3">
             <p className="text-sm text-gray-500 dark:text-gray-400">No health data yet</p>
             <div className="flex flex-col items-center space-y-2">
-              <Button size="sm" variant="outline" onClick={handleConnectFitbit} disabled={connecting}
-                className="text-xs border-emerald-300 dark:border-emerald-700 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-900/30">
-                <Link className="w-3.5 h-3.5 mr-1.5" />
-                {connecting ? 'Connecting…' : 'Connect Fitbit'}
-              </Button>
+              {fitbitStatus?.connected ? (
+                <Button size="sm" variant="outline" onClick={handleSync}
+                  className="text-xs border-emerald-300 dark:border-emerald-700 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-900/30">
+                  <RefreshCw className="w-3.5 h-3.5 mr-1.5" />
+                  Sync Health Data
+                </Button>
+              ) : (
+                <Button size="sm" variant="outline" onClick={() => navigate('/settings')}
+                  className="text-xs border-emerald-300 dark:border-emerald-700 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-100 dark:hover:bg-emerald-900/30">
+                  <Link className="w-3.5 h-3.5 mr-1.5" />
+                  Connect Wearable
+                </Button>
+              )}
               <span className="text-[10px] text-gray-400">or use the "Log" button to enter data manually</span>
             </div>
           </div>
@@ -471,16 +477,7 @@ const Dashboard = () => {
   const { connected } = useRealtimeUpdates(handleEmailUpdate, handleMeetingUpdate);
 
   if (isLoading) {
-    return (
-      <div className="space-y-6">
-        <div className="h-8 bg-gray-200 dark:bg-gray-800 rounded w-48 animate-pulse"></div>
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {[1, 2, 3, 4].map((i) => (
-            <div key={i} className="h-64 bg-gray-200 dark:bg-gray-800 rounded-lg animate-pulse"></div>
-          ))}
-        </div>
-      </div>
-    );
+    return <DashboardSkeleton />;
   }
 
   if (error) {

@@ -15,7 +15,7 @@ self.addEventListener('push', (event) => {
   console.log('Push notification received:', event);
 
   let notificationData = {
-    title: 'Proactive AI',
+    title: 'Orin AI',
     body: 'You have a new notification',
     icon: '/icon-192x192.png',
     badge: '/badge-72x72.png'

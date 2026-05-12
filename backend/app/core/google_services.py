@@ -725,11 +725,9 @@ class CalendarService:
                 'summary': title,
                 'start': {
                     'dateTime': start_datetime,
-                    'timeZone': 'UTC',
                 },
                 'end': {
                     'dateTime': end_datetime,
-                    'timeZone': 'UTC',
                 },
             }
             

@@ -130,7 +130,8 @@ const EmailDetail = ({ messageId, onBack, onUpdate }) => {
         }
         
         if (replyMessage) {
-          await emailAPI.replyToEmail(email.id, replyMessage);
+          // Native RSVP via Calendar handles the notification. 
+          // We avoid creating a new 'Re:' email thread in the inbox.
         }
       } else {
           setStatusMessage("RSVP sent via Calendar...");

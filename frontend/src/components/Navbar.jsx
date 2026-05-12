@@ -15,9 +15,9 @@ const Navbar = () => {
         {/* Logo and Name - Left Side */}
         <div className="flex items-center space-x-3">
           <div className="w-10 h-10 bg-gradient-to-br from-primary-500 to-primary-600 rounded-lg flex items-center justify-center flex-shrink-0">
-            <span className="text-white font-bold text-lg">P</span>
+            <span className="text-white font-bold text-lg">O</span>
           </div>
-          <span className="font-semibold text-xl text-gray-900 dark:text-gray-100">Proactive AI</span>
+          <span className="font-semibold text-xl text-gray-900 dark:text-gray-100">Orin AI</span>
         </div>
 
         {/* Right Side Actions */}

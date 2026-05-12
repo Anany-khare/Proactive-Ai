@@ -146,9 +146,14 @@ async def force_sync_health(
     today = datetime.now().strftime("%Y-%m-%d")
 
     # 1. Try Google Fit (automatic — uses existing Google OAuth)
-    data = await sync_google_fit_data(current_user.id, db, today)
-    if data:
-        return {"status": "synced", "source": "google_fit", "data": data}
+    try:
+        data = await sync_google_fit_data(current_user.id, db, today)
+        if data:
+            return {"status": "synced", "source": "google_fit", "data": data}
+    except ValueError as e:
+        if "Permissions" in str(e):
+            raise HTTPException(status_code=403, detail="Please log out and log back in to grant Google Fit permissions.")
+        # otherwise continue to Fitbit
 
     # 2. Try Fitbit (if configured)
     fitbit_token = get_fitbit_access_token(current_user.id, db)

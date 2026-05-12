@@ -42,10 +42,10 @@ def sync_user_data(user_id: int):
         # Sync emails
         try:
             gmail_service = GmailService(credentials)
-            # Fetch more emails for DB
-            emails_data = gmail_service.get_unread_emails(max_results=50)
+            # Fetch fewer emails to drastically speed up background sync
+            emails_data = gmail_service.get_unread_emails(max_results=10)
             if not emails_data:
-                emails_data = gmail_service.get_recent_emails(max_results=20)
+                emails_data = gmail_service.get_recent_emails(max_results=10)
                 
             if emails_data:
                 for email_data in emails_data:
